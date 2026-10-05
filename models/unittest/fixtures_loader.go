@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -51,6 +52,43 @@ func (f *fixturesLoaderInternal) mssqlTableHasIdentityColumn(db *sql.DB, tableNa
 	return count > 0, nil
 }
 
+// fillUserNamespaceColumns supplies disk_name and namespace_key for fixture rows.
+// Those columns are NOT NULL UNIQUE, and fixture inserts do not run BeforeInsert.
+func fillUserNamespaceColumns(rows []map[string]any) {
+	for _, row := range rows {
+		lower, _ := row["lower_name"].(string)
+		if lower == "" {
+			if name, ok := row["name"].(string); ok {
+				lower = strings.ToLower(name)
+			}
+		}
+		if _, ok := row["disk_name"]; !ok || row["disk_name"] == "" {
+			row["disk_name"] = lower
+		}
+		if _, ok := row["namespace_key"]; !ok || row["namespace_key"] == "" {
+			row["namespace_key"] = fmt.Sprintf("%d/%s", fixtureInt64(row["parent_id"]), lower)
+		}
+	}
+}
+
+func fixtureInt64(v any) int64 {
+	switch n := v.(type) {
+	case int:
+		return int64(n)
+	case int64:
+		return n
+	case uint64:
+		return int64(n)
+	case float64:
+		return int64(n)
+	case string:
+		parsed, _ := strconv.ParseInt(n, 10, 64)
+		return parsed
+	default:
+		return 0
+	}
+}
+
 func (f *fixturesLoaderInternal) preprocessFixtureRow(row []map[string]any) (err error) {
 	for _, m := range row {
 		for k, v := range m {
@@ -87,6 +125,9 @@ func (f *fixturesLoaderInternal) prepareFixtureItem(fixture *FixtureItem) (err e
 	}
 	if err = f.preprocessFixtureRow(rows); err != nil {
 		return fmt.Errorf("failed to preprocess fixture rows from %q: %w", fixture.fileFullPath, err)
+	}
+	if fixture.tableName == "user" {
+		fillUserNamespaceColumns(rows)
 	}
 
 	var sqlBuf []byte

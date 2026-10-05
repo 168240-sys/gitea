@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"gitea.dev/models/db"
+	"gitea.dev/models/organization"
 	"gitea.dev/models/unit"
 	user_model "gitea.dev/models/user"
 	"gitea.dev/modules/git"
@@ -555,9 +556,18 @@ func (repo *Repository) IsGenerated() bool {
 	return repo.TemplateID != 0
 }
 
+// WebOwnerPath is the URL owner segment. Subgroup repositories use the nested
+// route ("root/child"); every other repository keeps the flat owner name.
+func (repo *Repository) WebOwnerPath() string {
+	if repo.Owner != nil && strings.Contains(repo.Owner.RoutePath, "/") {
+		return repo.Owner.RoutePath
+	}
+	return repo.OwnerName
+}
+
 // Link returns the repository relative url
 func (repo *Repository) Link() string {
-	return setting.AppSubURL + "/" + url.PathEscape(repo.OwnerName) + "/" + url.PathEscape(repo.Name)
+	return setting.AppSubURL + "/" + util.PathEscapeSegments(repo.WebOwnerPath()) + "/" + url.PathEscape(repo.Name)
 }
 
 // ComposeCompareURL returns the repository comparison URL
@@ -611,7 +621,7 @@ type CloneLink struct {
 
 // ComposeHTTPSCloneURL returns HTTPS clone URL based on the given owner and repository name.
 func ComposeHTTPSCloneURL(ctx context.Context, owner, repo string) string {
-	return fmt.Sprintf("%s%s/%s.git", httplib.GuessCurrentAppURL(ctx), url.PathEscape(owner), url.PathEscape(repo))
+	return fmt.Sprintf("%s%s/%s.git", httplib.GuessCurrentAppURL(ctx), util.PathEscapeSegments(owner), url.PathEscape(repo))
 }
 
 // ComposeSSHCloneURL returns SSH clone URL based on the given owner and repository name.
@@ -634,7 +644,7 @@ func ComposeSSHCloneURL(doer *user_model.User, ownerName, repoName string) strin
 	// non-standard port, it must use full URI
 	if setting.SSH.Port != 22 {
 		sshHost := net.JoinHostPort(sshDomain, strconv.Itoa(setting.SSH.Port))
-		return fmt.Sprintf("ssh://%s@%s/%s/%s.git", sshUser, sshHost, url.PathEscape(ownerName), url.PathEscape(repoName))
+		return fmt.Sprintf("ssh://%s@%s/%s/%s.git", sshUser, sshHost, util.PathEscapeSegments(ownerName), url.PathEscape(repoName))
 	}
 
 	// for standard port, it can use a shorter URI (without the port)
@@ -643,14 +653,14 @@ func ComposeSSHCloneURL(doer *user_model.User, ownerName, repoName string) strin
 		sshHost = "[" + sshHost + "]" // for IPv6 address, wrap it with brackets
 	}
 	if setting.Repository.UseCompatSSHURI {
-		return fmt.Sprintf("ssh://%s@%s/%s/%s.git", sshUser, sshHost, url.PathEscape(ownerName), url.PathEscape(repoName))
+		return fmt.Sprintf("ssh://%s@%s/%s/%s.git", sshUser, sshHost, util.PathEscapeSegments(ownerName), url.PathEscape(repoName))
 	}
-	return fmt.Sprintf("%s@%s:%s/%s.git", sshUser, sshHost, url.PathEscape(ownerName), url.PathEscape(repoName))
+	return fmt.Sprintf("%s@%s:%s/%s.git", sshUser, sshHost, util.PathEscapeSegments(ownerName), url.PathEscape(repoName))
 }
 
 // ComposeTeaCloneCommand returns Tea CLI clone command based on the given owner and repository name.
 func ComposeTeaCloneCommand(ctx context.Context, owner, repo string) string {
-	return fmt.Sprintf("tea clone %s/%s", url.PathEscape(owner), url.PathEscape(repo))
+	return fmt.Sprintf("tea clone %s/%s", util.PathEscapeSegments(owner), url.PathEscape(repo))
 }
 
 func (repo *Repository) cloneLink(ctx context.Context, doer *user_model.User, repoPathName string) *CloneLink {
@@ -658,9 +668,9 @@ func (repo *Repository) cloneLink(ctx context.Context, doer *user_model.User, re
 		IsWikiRepo:   strings.HasSuffix(repoPathName, ".wiki"),
 		SupportHTTPS: !setting.Repository.DisableHTTPGit,
 		SupportSSH:   !setting.SSH.Disabled && (doer != nil || setting.SSH.ExposeAnonymous),
-		SSH:          ComposeSSHCloneURL(doer, repo.OwnerName, repoPathName),
-		HTTPS:        ComposeHTTPSCloneURL(ctx, repo.OwnerName, repoPathName),
-		Tea:          ComposeTeaCloneCommand(ctx, repo.OwnerName, repoPathName),
+		SSH:          ComposeSSHCloneURL(doer, repo.WebOwnerPath(), repoPathName),
+		HTTPS:        ComposeHTTPSCloneURL(ctx, repo.WebOwnerPath(), repoPathName),
+		Tea:          ComposeTeaCloneCommand(ctx, repo.WebOwnerPath(), repoPathName),
 	}
 }
 
@@ -734,20 +744,35 @@ func (err ErrRepoNotExist) Unwrap() error {
 	return util.ErrNotExist
 }
 
-// GetRepositoryByOwnerAndName returns the repository by given owner name and repo name
+// GetRepositoryByOwnerAndName returns the repository by given owner name and repo name.
+// ownerName may be a nested route ("root/child") or a single login/disk name.
 func GetRepositoryByOwnerAndName(ctx context.Context, ownerName, repoName string) (*Repository, error) {
-	var repo Repository
-	has, err := db.GetEngine(ctx).Table("repository").Select("repository.*").
-		Join("INNER", "`user`", "`user`.id = repository.owner_id").
-		Where("repository.lower_name = ?", strings.ToLower(repoName)).
-		And("`user`.lower_name = ?", strings.ToLower(ownerName)).
-		Get(&repo)
-	if err != nil {
-		return nil, err
-	} else if !has {
-		return nil, ErrRepoNotExist{0, 0, ownerName, repoName}
+	ownerName = strings.Trim(ownerName, "/")
+	var ownerID int64
+	if strings.Contains(ownerName, "/") {
+		org, err := organization.GetOrgByRoutePath(ctx, ownerName)
+		if err != nil {
+			if organization.IsErrOrgNotExist(err) {
+				return nil, ErrRepoNotExist{0, 0, ownerName, repoName}
+			}
+			return nil, err
+		}
+		ownerID = org.ID
+	} else {
+		owner, err := user_model.GetUserByName(ctx, ownerName)
+		if err != nil {
+			if user_model.IsErrUserNotExist(err) {
+				return nil, ErrRepoNotExist{0, 0, ownerName, repoName}
+			}
+			return nil, err
+		}
+		ownerID = owner.ID
 	}
-	return &repo, nil
+	repo, err := GetRepositoryByName(ctx, ownerID, repoName)
+	if err != nil && IsErrRepoNotExist(err) {
+		return nil, ErrRepoNotExist{0, ownerID, ownerName, repoName}
+	}
+	return repo, err
 }
 
 // GetRepositoryByName returns the repository by given name under user if exists.

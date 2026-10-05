@@ -78,12 +78,12 @@ type PackageFileDescriptor struct {
 
 // PackageWebLink returns the relative package web link
 func (pd *PackageDescriptor) PackageWebLink() string {
-	return fmt.Sprintf("%s/-/packages/%s/%s", pd.Owner.HomeLink(), string(pd.Package.Type), url.PathEscape(pd.Package.LowerName))
+	return fmt.Sprintf("%s/-/packages/%s/%s", pd.Owner.ScopedLink(), string(pd.Package.Type), url.PathEscape(pd.Package.LowerName))
 }
 
 // PackageSettingsLink returns the relative package settings link
 func (pd *PackageDescriptor) PackageSettingsLink() string {
-	return fmt.Sprintf("%s/-/packages/settings/%s/%s", pd.Owner.HomeLink(), string(pd.Package.Type), url.PathEscape(pd.Package.LowerName))
+	return fmt.Sprintf("%s/-/packages/settings/%s/%s", pd.Owner.ScopedLink(), string(pd.Package.Type), url.PathEscape(pd.Package.LowerName))
 }
 
 // VersionWebLink returns the relative package version web link

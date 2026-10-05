@@ -264,6 +264,17 @@ func CreatePendingRepositoryTransfer(ctx context.Context, doer, newOwner *user_m
 				Name:  repo.Name,
 			}
 		}
+		if newOwner.IsOrganization() {
+			taken, err := organization.HasChildOrg(ctx, newOwner.ID, repo.Name)
+			if err != nil {
+				return fmt.Errorf("CreatePendingRepositoryTransfer: %w", err)
+			} else if taken {
+				return ErrRepoAlreadyExist{
+					Uname: newOwner.LowerName,
+					Name:  repo.Name,
+				}
+			}
+		}
 
 		transfer := &RepoTransfer{
 			RepoID:      repo.ID,

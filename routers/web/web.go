@@ -1000,6 +1000,8 @@ func registerWebRoutes(m *web.Router, webAuth *AuthMiddleware) {
 
 		// require owner permission
 		m.Group("/{org}", func() {
+			m.Get("/subgroups/new", org.NewSubgroup)
+			m.Post("/subgroups/new", web.Bind[*forms.CreateOrgForm](), org.NewSubgroupPost)
 			m.Get("/teams/new", org.NewTeam)
 			m.Post("/teams/new", web.Bind[*forms.CreateTeamForm](), org.NewTeamPost)
 			m.Get("/teams/{team}/edit", org.EditTeam)
@@ -1057,6 +1059,7 @@ func registerWebRoutes(m *web.Router, webAuth *AuthMiddleware) {
 				m.Get("/audit_logs", org_setting.ViewAuditLogs)
 
 				m.Post("/rename", web.Bind[*forms.RenameOrgForm](), org.SettingsRenamePost)
+				m.Post("/move", org.SettingsMovePost)
 				m.Post("/delete", org.SettingsDeleteOrgPost)
 				m.Post("/visibility", org.SettingsChangeVisibilityPost)
 

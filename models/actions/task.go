@@ -13,6 +13,7 @@ import (
 	runnerv1 "gitea.dev/actionslib/runner/v1"
 	auth_model "gitea.dev/models/auth"
 	"gitea.dev/models/db"
+	"gitea.dev/models/organization"
 	"gitea.dev/models/unit"
 	"gitea.dev/modules/actions/jobparser"
 	"gitea.dev/modules/globallock"
@@ -271,9 +272,19 @@ func CreateTaskForRunner(ctx context.Context, runner *ActionRunner) (*ActionTask
 	if runner.RepoID != 0 {
 		jobCond = builder.Eq{"repo_id": runner.RepoID}
 	} else if runner.OwnerID != 0 {
+		ownerIDs := []int64{runner.OwnerID}
+		if organization.HasAnySubgroup(ctx) {
+			ids, err := organization.DescendantOrgIDs(ctx, runner.OwnerID)
+			if err != nil {
+				return nil, false, fmt.Errorf("CreateTaskForRunner: %w", err)
+			}
+			if len(ids) > 0 {
+				ownerIDs = ids
+			}
+		}
 		jobCond = builder.In("repo_id", builder.Select("`repository`.id").From("repository").
 			Join("INNER", "repo_unit", "`repository`.id = `repo_unit`.repo_id").
-			Where(builder.Eq{"`repository`.owner_id": runner.OwnerID, "`repo_unit`.type": unit.TypeActions}))
+			Where(builder.In("`repository`.owner_id", ownerIDs).And(builder.Eq{"`repo_unit`.type": unit.TypeActions})))
 	}
 	baseCond := builder.Eq{"task_id": 0, "status": StatusWaiting, "is_reusable_caller": false}.And(jobCond)
 

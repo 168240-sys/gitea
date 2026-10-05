@@ -64,6 +64,13 @@ func DeleteOrganization(ctx context.Context, org *org_model.Organization, purge 
 	}
 
 	if err := db.WithTx(ctx, func(ctx context.Context) error {
+		hasChildren, err := org_model.HasChildOrgs(ctx, org.ID)
+		if err != nil {
+			return fmt.Errorf("DeleteOrganization: %w", err)
+		} else if hasChildren {
+			return org_model.ErrSubgroup{Code: org_model.SubgroupCodeHasChildren}
+		}
+
 		// Check ownership of repository.
 		count, err := repo_model.CountRepositories(ctx, repo_model.CountRepositoryOptions{OwnerID: org.ID})
 		if err != nil {
@@ -92,7 +99,7 @@ func DeleteOrganization(ctx context.Context, org *org_model.Organization, purge 
 	// FIXME: system notice
 	// Note: There are something just cannot be roll back,
 	//	so just keep error logs of those operations.
-	path := gitrepo.UserLocalPath(org.Name)
+	path := gitrepo.UserLocalPath(org.AsUser().StorageName())
 
 	if err := util.RemoveAllWithRetry(path); err != nil {
 		return fmt.Errorf("failed to RemoveAll %s: %w", path, err)
@@ -160,6 +167,9 @@ func updateRepoForVisibilityChanged(ctx context.Context, repo *repo_model.Reposi
 func ChangeOrganizationVisibility(ctx context.Context, org *org_model.Organization, visibility structs.VisibleType) error {
 	if org.Visibility == visibility {
 		return nil
+	}
+	if err := org_model.CheckVisibilityChange(ctx, org, visibility); err != nil {
+		return fmt.Errorf("ChangeOrganizationVisibility: %w", err)
 	}
 
 	oldVisibility := org.Visibility

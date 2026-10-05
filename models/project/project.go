@@ -130,7 +130,7 @@ func (p *Project) LoadRepo(ctx context.Context) (err error) {
 }
 
 func ProjectLinkForOrg(org *user_model.User, projectID int64) string { //nolint:revive // export stutter
-	return fmt.Sprintf("%s/-/projects/%d", org.HomeLink(), projectID)
+	return fmt.Sprintf("%s/-/projects/%d", org.ScopedLink(), projectID)
 }
 
 func ProjectLinkForRepo(repo *repo_model.Repository, projectID int64) string { //nolint:revive // export stutter

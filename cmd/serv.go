@@ -203,19 +203,9 @@ func runServ(ctx context.Context, c *cli.Command) error {
 		return fail(ctx, "Too few arguments", "Too few arguments in cmd: %s", cmd)
 	}
 
-	var reqOwnerName, reqRepoName string
-	{
-		var ok bool
-		reqRepoPath := strings.TrimPrefix(sshCmdArgs[1], "/")
-		reqOwnerName, reqRepoName, ok = strings.Cut(reqRepoPath, "/")
-		if !ok {
-			return fail(ctx, "Invalid repository path", "Invalid repository path: %v", reqRepoPath)
-		}
-		reqRepoName = strings.TrimSuffix(reqRepoName, ".git") // "the-repo-name" or "the-repo-name.wiki"
-	}
-
-	if !repo_model.IsValidSSHAccessRepoName(reqRepoName) {
-		return fail(ctx, "Invalid repo name", "Invalid repo name: %s", reqRepoName)
+	reqOwnerName, reqRepoName, ok := splitServRepoPath(strings.TrimPrefix(sshCmdArgs[1], "/"))
+	if !ok {
+		return fail(ctx, "Invalid repository path", "Invalid repository path: %v", sshCmdArgs[1])
 	}
 
 	if c.Bool("enable-pprof") {
@@ -347,4 +337,37 @@ func runServ(ctx context.Context, c *cli.Command) error {
 	}
 
 	return nil
+}
+
+// splitServRepoPath splits "owner/repo", "owner/repo.git", or "owner/group/repo.git".
+// The repository name may itself contain '/' when it lives in a subgroup.
+func splitServRepoPath(reqRepoPath string) (owner, repo string, ok bool) {
+	reqRepoPath = strings.TrimPrefix(reqRepoPath, "/")
+	reqRepoPath = strings.TrimSuffix(reqRepoPath, ".git")
+	parts := strings.Split(reqRepoPath, "/")
+	if len(parts) < 2 || parts[0] == "" {
+		return "", "", false
+	}
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return "", "", false
+		}
+	}
+	owner = parts[0]
+	if len(parts) == 2 {
+		if !repo_model.IsValidSSHAccessRepoName(parts[1]) {
+			return "", "", false
+		}
+		return owner, parts[1], true
+	}
+	for _, part := range parts[1 : len(parts)-1] {
+		if !repo_model.IsValidSSHAccessRepoName(part) {
+			return "", "", false
+		}
+	}
+	last := parts[len(parts)-1]
+	if !repo_model.IsValidSSHAccessRepoName(last) {
+		return "", "", false
+	}
+	return owner, strings.Join(parts[1:], "/"), true
 }

@@ -311,14 +311,37 @@ func CreateOrganization(ctx context.Context, org *Organization, owner *user_mode
 		return err
 	}
 
-	isExist, err := user_model.IsUserExist(ctx, 0, org.Name)
-	if err != nil {
-		return err
-	} else if isExist {
-		return user_model.ErrUserAlreadyExist{Name: org.Name}
-	}
-
 	org.LowerName = strings.ToLower(org.Name)
+	if org.ParentID == 0 {
+		isExist, err := user_model.IsUserExist(ctx, 0, org.Name)
+		if err != nil {
+			return err
+		} else if isExist {
+			return user_model.ErrUserAlreadyExist{Name: org.Name}
+		}
+		if org.DiskName == "" {
+			org.DiskName = org.LowerName
+		}
+	} else {
+		taken, err := SiblingLowerNameTaken(ctx, org.ParentID, 0, org.LowerName)
+		if err != nil {
+			return fmt.Errorf("CreateOrganization: %w", err)
+		} else if taken {
+			return user_model.ErrUserAlreadyExist{Name: org.Name}
+		}
+		if org.DiskName == "" {
+			org.DiskName, err = user_model.AllocateDiskName(ctx, 0, org.LowerName)
+			if err != nil {
+				return fmt.Errorf("CreateOrganization: %w", err)
+			}
+		}
+	}
+	if org.NamespaceKey == "" {
+		org.NamespaceKey = user_model.NamespaceKeyFor(org.ParentID, org.LowerName)
+	}
+	if org.RoutePath == "" {
+		org.RoutePath = org.LowerName
+	}
 	if org.Rands, err = user_model.GetUserSalt(); err != nil {
 		return err
 	}
@@ -332,12 +355,18 @@ func CreateOrganization(ctx context.Context, org *Organization, owner *user_mode
 	org.Type = user_model.UserTypeOrganization
 
 	return db.WithTx(ctx, func(ctx context.Context) error {
-		if err = user_model.DeleteUserRedirect(ctx, org.Name); err != nil {
-			return err
+		// A subgroup must not delete a root user's rename redirect for the same letters.
+		if org.ParentID == 0 {
+			if err = user_model.DeleteUserRedirect(ctx, org.Name); err != nil {
+				return err
+			}
 		}
 
 		if err = db.Insert(ctx, org); err != nil {
 			return fmt.Errorf("insert organization: %w", err)
+		}
+		if err = user_model.FinalizeDiskName(ctx, org.AsUser()); err != nil {
+			return err
 		}
 		if err = user_model.GenerateRandomAvatar(ctx, org.AsUser()); err != nil {
 			return fmt.Errorf("generate random avatar: %w", err)
@@ -397,19 +426,23 @@ func CreateOrganization(ctx context.Context, org *Organization, owner *user_mode
 	})
 }
 
-// GetOrgByName returns organization by given name.
+// GetOrgByName returns the organization for a login, disk name, or unambiguous local name.
+// A root organization wins over a subgroup with the same lower name.
 func GetOrgByName(ctx context.Context, name string) (*Organization, error) {
 	if len(name) == 0 {
 		return nil, ErrOrgNotExist{0, name}
 	}
-
-	u, has, err := db.Get[Organization](ctx, builder.Eq{"lower_name": strings.ToLower(name), "`type`": user_model.UserTypeOrganization})
+	u, err := user_model.GetUserByName(ctx, name)
 	if err != nil {
+		if user_model.IsErrUserNotExist(err) {
+			return nil, ErrOrgNotExist{0, name}
+		}
 		return nil, err
-	} else if !has {
+	}
+	if !u.IsOrganization() {
 		return nil, ErrOrgNotExist{0, name}
 	}
-	return u, nil
+	return OrgFromUser(u), nil
 }
 
 // GetOrgUserMaxAuthorizeLevel returns highest authorize level of user in an organization
@@ -454,10 +487,36 @@ func ownerVisibilitySatisfiesDoer(orgOrUser, user *user_model.User) bool {
 	return orgOrUser.Visibility != structs.VisibleTypePrivate && !user.IsRestricted
 }
 
-// HasOrgOrUserVisible tells if the given user can see the given org or user
+// HasOrgOrUserVisible tells if the given user can see the given org or user.
+// Owners of an ancestor organization can see private subgroups.
 func HasOrgOrUserVisible(ctx context.Context, owner, doer *user_model.User) bool {
-	return ownerVisibilitySatisfiesDoer(owner, doer) ||
-		(doer != nil && OrgFromUser(owner).HasMemberWithUserID(ctx, doer.ID))
+	if ownerVisibilitySatisfiesDoer(owner, doer) {
+		return true
+	}
+	if doer == nil || doer.IsGhost() || owner == nil || !owner.IsOrganization() {
+		return false
+	}
+	if OrgFromUser(owner).HasMemberWithUserID(ctx, doer.ID) {
+		return true
+	}
+	if !HasAnySubgroup(ctx) {
+		return false
+	}
+	ok, err := IsOrganizationOwner(ctx, owner.ID, doer.ID)
+	if err != nil {
+		log.Error("HasOrgOrUserVisible: %v", err)
+		return false
+	}
+	if ok {
+		return true
+	}
+	// A parent team that includes every repository can see the child organization.
+	teams, err := PropagatingAncestorTeams(ctx, owner.ID, doer.ID)
+	if err != nil {
+		log.Error("HasOrgOrUserVisible: %v", err)
+		return false
+	}
+	return len(teams) > 0
 }
 
 // HasOrgsVisible tells if the given user can see at least one of the orgs provided

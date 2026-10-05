@@ -3,6 +3,10 @@
 	<div class="flex-relaxed-list tw-flex-1">
 		<div class="ui header flex-left-right tw-m-0">
 			<div class="flex-text-block">
+				{{if .ParentOrg}}
+					<a class="tw-text-text-light" href="{{.ParentOrgLink}}">{{.ParentOrg.DisplayName}}</a>
+					<span class="tw-text-text-light">/</span>
+				{{end}}
 				<span class="tw-text-2xl">{{.Org.DisplayName}}</span>
 				{{if .Org.Visibility.IsLimited}}<span class="ui large basic horizontal label">{{ctx.Locale.Tr "org.settings.visibility.limited_shortname"}}</span>{{end}}
 				{{if .Org.Visibility.IsPrivate}}<span class="ui large basic horizontal label">{{ctx.Locale.Tr "org.settings.visibility.private_shortname"}}</span>{{end}}

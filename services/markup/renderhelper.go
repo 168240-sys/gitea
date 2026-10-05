@@ -6,6 +6,7 @@ package markup
 import (
 	"context"
 
+	"gitea.dev/models/organization"
 	"gitea.dev/models/user"
 	"gitea.dev/modules/markup"
 	gitea_context "gitea.dev/services/context"
@@ -29,6 +30,13 @@ func FormalRenderHelperFuncs() *markup.RenderHelperFuncs {
 
 			// when using gitea context (web context), use user's visibility and user's permission to check
 			return user.IsUserVisibleToViewer(giteaCtx, mentionedUser, giteaCtx.Doer)
+		},
+		OrgPathMentionLink: func(ctx context.Context, path string) string {
+			var doer *user.User
+			if giteaCtx := gitea_context.GetWebContext(ctx); giteaCtx != nil {
+				doer = giteaCtx.Doer
+			}
+			return organization.MentionLink(ctx, path, doer)
 		},
 	}
 }

@@ -296,9 +296,13 @@ func UserCollaborationRepoCond(idStr string, userID int64) builder.Cond {
 	)
 }
 
-// UserOrgTeamRepoCond selects repos that the given user has access to through team membership
+// UserOrgTeamRepoCond selects repos that the given user has access to through team membership.
+// Ancestor teams with includes_all_repositories also match descendant repositories.
 func UserOrgTeamRepoCond(idStr string, userID int64) builder.Cond {
-	return builder.In(idStr, userOrgTeamRepoBuilder(userID))
+	return builder.Or(
+		builder.In(idStr, userOrgTeamRepoBuilder(userID)),
+		builder.In(idStr, ancestorAllReposRepoBuilder(userID, 0, false)),
+	)
 }
 
 // userOrgTeamRepoBuilder returns repo ids where user's teams can access.
@@ -322,7 +326,41 @@ func userOrgTeamUnitRepoBuilder(userID int64, unitType unit.Type) *builder.Build
 
 // userOrgTeamUnitRepoCond returns a condition to select repo ids where user's teams can access the special unit.
 func userOrgTeamUnitRepoCond(idStr string, userID int64, unitType unit.Type) builder.Cond {
-	return builder.In(idStr, userOrgTeamUnitRepoBuilder(userID, unitType))
+	return builder.Or(
+		builder.In(idStr, userOrgTeamUnitRepoBuilder(userID, unitType)),
+		builder.In(idStr, ancestorAllReposRepoBuilder(userID, unitType, true)),
+	)
+}
+
+// ancestorAllReposRepoBuilder selects repositories owned by a descendant of a team
+// that includes every repository. Up to MaxSubgroupDepth ancestors are considered.
+func ancestorAllReposRepoBuilder(userID int64, unitType unit.Type, filterUnit bool) *builder.Builder {
+	b := builder.Select("`repository`.id").
+		From("`repository`").
+		Join("INNER", "team", builder.Expr("team.includes_all_repositories = ?", true)).
+		Join("INNER", "team_user", builder.Expr("team_user.team_id = team.id AND team_user.uid = ?", userID))
+	if filterUnit {
+		b = b.Join("LEFT", "team_unit", builder.Expr("team_unit.team_id = team.id AND team_unit.`type` = ?", unitType))
+	}
+	cond := builder.Or(ancestorOrgIDExprs()...)
+	if filterUnit {
+		cond = builder.And(cond, builder.Or(
+			builder.Gt{"team.authorize": int(perm.AccessModeNone)},
+			builder.Gt{"team_unit.access_mode": int(perm.AccessModeNone)},
+		))
+	}
+	return b.Where(cond)
+}
+
+func ancestorOrgIDExprs() []builder.Cond {
+	// owner.parent_id, then that parent's parent, up to five levels.
+	sub := "(SELECT parent_id FROM `user` WHERE id = `repository`.owner_id)"
+	conds := make([]builder.Cond, 0, 5)
+	for range 5 {
+		conds = append(conds, builder.Expr("team.org_id = "+sub))
+		sub = "(SELECT parent_id FROM `user` WHERE id = " + sub + ")"
+	}
+	return conds
 }
 
 // UserOrgUnitRepoCond selects repos that the given user has access to through org and the special unit

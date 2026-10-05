@@ -9,6 +9,7 @@ import (
 
 	asymkey_model "gitea.dev/models/asymkey"
 	deploykey_model "gitea.dev/models/deploykey"
+	"gitea.dev/models/organization"
 	"gitea.dev/models/perm"
 	access_model "gitea.dev/models/perm/access"
 	repo_model "gitea.dev/models/repo"
@@ -69,6 +70,9 @@ func ServCommand(ctx *context.PrivateContext) {
 	keyID := ctx.PathParamInt64("keyid")
 	reqOwnerName := ctx.PathParam("owner")
 	reqRepoName := ctx.PathParam("repo")
+	if nested := ctx.FormString("repo_path"); nested != "" {
+		reqRepoName = nested
+	}
 	mode := perm.AccessMode(ctx.FormInt("mode"))
 	verb := ctx.FormString("verb")
 
@@ -110,6 +114,22 @@ func ServCommand(ctx *context.PrivateContext) {
 		log.Debug("User %s has been redirected to %s", results.OwnerName, redirectUser.Name)
 		results.OwnerName = redirectUser.Name
 		owner = redirectUser
+	}
+
+	if strings.Contains(results.RepoName, "/") {
+		resolvedOwner, resolvedRepo, err := organization.ResolveNestedRepo(ctx, owner, results.RepoName)
+		if err != nil {
+			if organization.IsErrOrgNotExist(err) {
+				ctx.PrivateUserErrorf(http.StatusNotFound, "Cannot find repository %s", repoLogName)
+				return
+			}
+			ctx.PrivateInternalErrorf("Unable to resolve subgroup repository %s, error: %v", repoLogName, err)
+			return
+		}
+		owner = resolvedOwner
+		results.OwnerName = resolvedOwner.Name
+		results.RepoName = resolvedRepo
+		repoLogName = results.OwnerName + "/" + results.RepoName + util.Iif(results.IsWiki, ".wiki", "")
 	}
 
 	// Now get the Repository and set the results section

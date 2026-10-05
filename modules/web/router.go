@@ -233,6 +233,10 @@ func (r *Router) Patch(pattern string, h ...any) {
 	r.Methods("PATCH", pattern, h...)
 }
 
+// RewriteRequestPath may rewrite req.URL.Path before chi matches a route.
+// It is used for nested organization URLs. Nil leaves the path unchanged.
+var RewriteRequestPath func(req *http.Request)
+
 // ServeHTTP implements http.Handler
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// TODO: need to move it to the top-level common middleware, otherwise each "Mount" will cause it to be executed multiple times, which is inefficient.
@@ -301,8 +305,26 @@ func (r *Router) normalizeRequestPath(resp http.ResponseWriter, req *http.Reques
 		req.URL.Path = decodedPath
 	}
 
+	if RewriteRequestPath != nil {
+		RewriteRequestPath(req)
+		if dest := req.Header.Get(OrgRouteRedirectHeader); dest != "" {
+			req.Header.Del(OrgRouteRedirectHeader)
+			if strings.HasPrefix(dest, "/") && !strings.HasPrefix(dest, "//") && !strings.Contains(dest, "://") {
+				if req.URL.RawQuery != "" {
+					dest += "?" + req.URL.RawQuery
+				}
+				http.Redirect(resp, req, setting.AppSubURL+dest, http.StatusMovedPermanently)
+				return
+			}
+		}
+	}
+
 	next.ServeHTTP(resp, req)
 }
+
+// OrgRouteRedirectHeader is set by the organization path rewriter for a moved subgroup.
+// It is cleared before the request is handled. Do not send it from a client.
+const OrgRouteRedirectHeader = "X-Gitea-Org-Route-Redirect"
 
 // Combo delegates requests to Combo
 func (r *Router) Combo(pattern string, h ...any) *Combo {

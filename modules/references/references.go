@@ -29,18 +29,18 @@ var (
 	// While fast, this is also incorrect and leads to false positives.
 	// TODO: fix invalid linking issue
 
-	// mentionPattern matches all mentions in the form of "@user" or "@org/team"
-	mentionPattern = regexp.MustCompile(`(?:\s|^|\(|\[)(@[-\w][-.\w]*?|@[-\w][-.\w]*?/[-\w][-.\w]*?)(?:\s|$|[:,;.?!](\s|$)|'|\)|\])`)
+	// mentionPattern matches "@user", "@org/team", and nested "@root/child" or "@root/child/team".
+	mentionPattern = regexp.MustCompile(`(?:\s|^|\(|\[)(@[-\w][-.\w]*?(?:/[-\w][-.\w]*?)*)(?:\s|$|[:,;.?!](\s|$)|'|\)|\])`)
 	// issueNumericPattern matches string that references to a numeric issue, e.g. #1287
 	issueNumericPattern = regexp.MustCompile(`(?:\s|^|\(|\[|\'|\")([#!][0-9]+)(?:\s|$|\)|\]|\'|\"|[:;,.?!]\s|[:;,.?!]$)`)
 	// issueAlphanumericPattern matches string that references to an alphanumeric issue, e.g. ABC-1234
 	issueAlphanumericPattern = regexp.MustCompile(`(?:\s|^|\(|\[|\"|\')([A-Z]{1,10}-[1-9][0-9]*)(?:\s|$|\)|\]|:|\.(\s|$)|\"|\'|,)`)
 	// crossReferenceIssueNumericPattern matches string that references a numeric issue in a different repository
-	// e.g. org/repo#12345
-	crossReferenceIssueNumericPattern = regexp.MustCompile(`(?:\s|^|\(|\[)([0-9a-zA-Z-_\.]+/[0-9a-zA-Z-_\.]+[#!][0-9]+)(?:\s|$|\)|\]|[:;,.?!]\s|[:;,.?!]$)`)
+	// e.g. org/repo#12345 or root/child/repo#12345
+	crossReferenceIssueNumericPattern = regexp.MustCompile(`(?:\s|^|\(|\[)((?:[0-9a-zA-Z-_\.]+/)+[0-9a-zA-Z-_\.]+[#!][0-9]+)(?:\s|$|\)|\]|[:;,.?!]\s|[:;,.?!]$)`)
 	// crossReferenceCommitPattern matches a string that references a commit in a different repository
-	// e.g. go-gitea/gitea@d8a994ef, go-gitea/gitea@d8a994ef243349f321568f9e36d5c3f444b99cae (7-40 characters)
-	crossReferenceCommitPattern = regexp.MustCompile(`(?:\s|^|\(|\[)([0-9a-zA-Z-_\.]+)/([0-9a-zA-Z-_\.]+)@([0-9a-f]{7,64})(?:\s|$|\)|\]|[:;,.?!]\s|[:;,.?!]$)`)
+	// e.g. go-gitea/gitea@d8a994ef, root/child/repo@d8a994ef (7-64 hex characters)
+	crossReferenceCommitPattern = regexp.MustCompile(`(?:\s|^|\(|\[)((?:[0-9a-zA-Z-_\.]+/)+)([0-9a-zA-Z-_\.]+)@([0-9a-f]{7,64})(?:\s|$|\)|\]|[:;,.?!]\s|[:;,.?!]$)`)
 	// spaceTrimmedPattern let's find the trailing space
 	spaceTrimmedPattern = regexp.MustCompile(`(?:.*[0-9a-zA-Z-_])\s`)
 	// timeLogPattern matches string for time tracking
@@ -186,7 +186,7 @@ func getGiteaHostName() string {
 			giteaIssuePullPattern = regexp.MustCompile(
 				`(\s|^|\(|\[)` +
 					regexp.QuoteMeta(strings.TrimSpace(setting.AppURL)) +
-					`([0-9a-zA-Z-_\.]+/[0-9a-zA-Z-_\.]+)/` +
+					`((?:[0-9a-zA-Z-_\.]+/)+[0-9a-zA-Z-_\.]+)/` +
 					`((?:issues)|(?:pulls))/([0-9]+)(?:\s|$|\)|\]|[:;,.?!]\s|[:;,.?!]$)`)
 		} else {
 			giteaHost = ""
@@ -373,7 +373,7 @@ func FindRenderizableCommitCrossReference(content string) (bool, *RenderizableRe
 	}
 
 	return true, &RenderizableReference{
-		Owner:       content[m[2]:m[3]],
+		Owner:       strings.TrimSuffix(content[m[2]:m[3]], "/"),
 		Name:        content[m[4]:m[5]],
 		CommitSha:   content[m[6]:m[7]],
 		RefLocation: &RefSpan{Start: m[2], End: m[7]},
@@ -586,13 +586,16 @@ func getCrossReference(content []byte, start, end int, fromLink, prOnly bool) *r
 		}
 	}
 	parts := strings.Split(strings.ToLower(repo), "/")
-	if len(parts) != 2 {
+	if len(parts) < 2 {
 		return nil
 	}
-	owner, name := parts[0], parts[1]
-	if !validNamePattern.MatchString(owner) || !validNamePattern.MatchString(name) {
-		return nil
+	for _, part := range parts {
+		if !validNamePattern.MatchString(part) {
+			return nil
+		}
 	}
+	owner := strings.Join(parts[:len(parts)-1], "/")
+	name := parts[len(parts)-1]
 	action, location := findActionKeywords(content, start)
 	return &rawReference{
 		index:          index,

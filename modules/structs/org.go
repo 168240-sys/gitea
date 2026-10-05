@@ -28,6 +28,10 @@ type Organization struct {
 	// username of the organization
 	// deprecated
 	UserName string `json:"username"`
+	// The parent organization ID. Zero for a top-level organization.
+	ParentID int64 `json:"parent_id"`
+	// Slash-separated public path from the root organization, for example "root/child".
+	RoutePath string `json:"route_path"`
 }
 
 // OrganizationPermissions list different users permissions on an organization
@@ -63,6 +67,12 @@ type CreateOrgOption struct {
 	Visibility VisibilityString `json:"visibility" binding:"In(,public,limited,private)"`
 	// Whether repository administrators can change team access
 	RepoAdminChangeTeamAccess bool `json:"repo_admin_change_team_access"`
+}
+
+// MoveOrgOption options for moving an organization under a new parent.
+type MoveOrgOption struct {
+	// Name of the new parent organization. Empty moves the organization to the top level.
+	Parent string `json:"parent"`
 }
 
 // EditOrgOption options for editing an organization

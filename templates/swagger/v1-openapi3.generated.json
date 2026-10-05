@@ -7939,6 +7939,18 @@
         "type": "object",
         "x-go-package": "gitea.dev/modules/structs"
       },
+      "MoveOrgOption": {
+        "properties": {
+          "parent": {
+            "description": "Name of the new parent organization. Empty moves the organization to the top level.",
+            "type": "string",
+            "x-go-name": "Parent"
+          }
+        },
+        "title": "MoveOrgOption options for moving an organization under a new parent.",
+        "type": "object",
+        "x-go-package": "gitea.dev/modules/structs"
+      },
       "MoveProjectColumnsOption": {
         "description": "MoveProjectColumnsOption represents options for reordering a project's columns",
         "properties": {
@@ -8222,10 +8234,21 @@
             "type": "string",
             "x-go-name": "Name"
           },
+          "parent_id": {
+            "description": "The parent organization ID. Zero for a top-level organization.",
+            "format": "int64",
+            "type": "integer",
+            "x-go-name": "ParentID"
+          },
           "repo_admin_change_team_access": {
             "description": "Whether repository administrators can change team access",
             "type": "boolean",
             "x-go-name": "RepoAdminChangeTeamAccess"
+          },
+          "route_path": {
+            "description": "Slash-separated public path from the root organization, for example \"root/child\".",
+            "type": "string",
+            "x-go-name": "RoutePath"
           },
           "username": {
             "deprecated": true,
@@ -14635,6 +14658,49 @@
         ]
       }
     },
+    "/orgs/{org}/move": {
+      "post": {
+        "description": "The caller must own this organization and the new parent. An empty parent makes it top-level. The git directory is not renamed. Previous nested URLs redirect to the new path.",
+        "operationId": "orgMove",
+        "parameters": [
+          {
+            "description": "name of the organization",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveOrgOption"
+              }
+            }
+          },
+          "required": true,
+          "x-originalParamName": "body"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Organization"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/validationError"
+          }
+        },
+        "summary": "Move an organization",
+        "tags": [
+          "organization"
+        ]
+      }
+    },
     "/orgs/{org}/projects": {
       "get": {
         "operationId": "orgListProjects",
@@ -15804,6 +15870,161 @@
           }
         },
         "summary": "Create a repository in an organization",
+        "tags": [
+          "organization"
+        ]
+      }
+    },
+    "/orgs/{org}/subgroups": {
+      "get": {
+        "operationId": "orgListSubgroups",
+        "parameters": [
+          {
+            "description": "name of the organization",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OrganizationList"
+          }
+        },
+        "summary": "List an organization's subgroups",
+        "tags": [
+          "organization"
+        ]
+      },
+      "post": {
+        "description": "A subgroup is an organization nested under another organization. Its web and git path is /{org}/{subgroup}/... The local name only has to be unique under that parent. A colliding name is reached through the nested path; its flat URL uses a generated disk name.",
+        "operationId": "orgCreateSubgroup",
+        "parameters": [
+          {
+            "description": "name of the parent organization",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOrgOption"
+              }
+            }
+          },
+          "required": true,
+          "x-originalParamName": "organization"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Organization"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/validationError"
+          }
+        },
+        "summary": "Create a subgroup",
+        "tags": [
+          "organization"
+        ]
+      }
+    },
+    "/orgs/{org}/subgroups/{subgroup}": {
+      "get": {
+        "operationId": "orgGetSubgroup",
+        "parameters": [
+          {
+            "description": "name of the parent organization",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "local name of the subgroup",
+            "in": "path",
+            "name": "subgroup",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Organization"
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound"
+          }
+        },
+        "summary": "Get a subgroup",
+        "tags": [
+          "organization"
+        ]
+      }
+    },
+    "/orgs/{org}/subgroups/{subgroup}/move": {
+      "post": {
+        "description": "The caller must own the subgroup and the new parent. The git directory is not renamed. Previous nested URLs redirect to the new path.",
+        "operationId": "orgMoveSubgroup",
+        "parameters": [
+          {
+            "description": "name of the current parent organization",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "local name of the subgroup",
+            "in": "path",
+            "name": "subgroup",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveOrgOption"
+              }
+            }
+          },
+          "required": true,
+          "x-originalParamName": "body"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Organization"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/validationError"
+          }
+        },
+        "summary": "Move a subgroup",
         "tags": [
           "organization"
         ]

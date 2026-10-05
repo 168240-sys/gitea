@@ -468,8 +468,10 @@ func GetIndividualUserRepoPermission(ctx context.Context, repo *repo_model.Repos
 		return perm, nil
 	}
 
-	// Admin or the owner has super access to the repository
-	if user.IsAdmin || user.ID == repo.OwnerID {
+	// Admin or the owner has super access to the repository.
+	// Owners of an ancestor organization have the same access to subgroup repositories.
+	// Grants combine by taking the highest mode; subgroups never deny a parent grant.
+	if user.IsAdmin || user.ID == repo.OwnerID || ancestorOrgOwner(ctx, repo, user) {
 		perm.AccessMode = perm_model.AccessModeOwner
 		return perm, nil
 	}
@@ -488,11 +490,17 @@ func GetIndividualUserRepoPermission(ctx context.Context, repo *repo_model.Repos
 	minAccessMode := util.Iif(!repo.IsPrivate && !user.IsRestricted, perm_model.AccessModeRead, perm_model.AccessModeNone)
 	perm.AccessMode = max(perm.AccessMode, minAccessMode)
 
-	// get units mode from teams
+	// get units mode from teams. Ancestor teams that include every repository
+	// grant the same access on descendant repositories. Specific-repo teams do not.
 	perm.orgRepoTeams, err = organization.GetUserRepoTeams(ctx, repo.OwnerID, user.ID, repo.ID)
 	if err != nil {
 		return perm, err
 	}
+	ancestorTeams, err := organization.PropagatingAncestorTeams(ctx, repo.OwnerID, user.ID)
+	if err != nil {
+		return perm, err
+	}
+	perm.orgRepoTeams = append(perm.orgRepoTeams, ancestorTeams...)
 	if len(perm.orgRepoTeams) == 0 {
 		return perm, nil
 	}
@@ -526,6 +534,18 @@ func GetIndividualUserRepoPermission(ctx context.Context, repo *repo_model.Repos
 	return perm, err
 }
 
+func ancestorOrgOwner(ctx context.Context, repo *repo_model.Repository, user *user_model.User) bool {
+	if user == nil || repo == nil || repo.Owner == nil || !repo.Owner.IsOrganization() || !organization.HasAnySubgroup(ctx) {
+		return false
+	}
+	ok, err := organization.IsAncestorOrganizationOwner(ctx, repo.OwnerID, user.ID)
+	if err != nil {
+		log.Error("ancestorOrgOwner: %v", err)
+		return false
+	}
+	return ok
+}
+
 func IsUserRepoAdmin(ctx context.Context, repo *repo_model.Repository, user *user_model.User) bool {
 	return (user != nil && user.IsAdmin) || IsUserRealRepoAdmin(ctx, repo, user)
 }
@@ -548,6 +568,11 @@ func IsUserRealRepoAdmin(ctx context.Context, repo *repo_model.Repository, user 
 	if err != nil {
 		return false
 	}
+	ancestorTeams, err := organization.PropagatingAncestorTeams(ctx, repo.OwnerID, user.ID)
+	if err != nil {
+		return false
+	}
+	teams = append(teams, ancestorTeams...)
 
 	for _, team := range teams {
 		if team.AccessMode >= perm_model.AccessModeAdmin {

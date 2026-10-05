@@ -246,7 +246,7 @@ func Repos(ctx *context.Context) {
 		repoNames := make([]string, 0, setting.UI.Admin.UserPagingNum)
 		repos := map[string]*repo_model.Repository{}
 		// We're going to iterate by pagesize.
-		root := gitrepo.UserLocalPath(ctxUser.Name)
+		root := gitrepo.UserLocalPath(ctxUser.StorageName())
 		if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				if os.IsNotExist(err) {

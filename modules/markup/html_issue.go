@@ -5,6 +5,7 @@ package markup
 
 import (
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"gitea.dev/modules/log"
 	"gitea.dev/modules/references"
 	"gitea.dev/modules/regexplru"
+	"gitea.dev/modules/setting"
 	"gitea.dev/modules/templates/vars"
 	"gitea.dev/modules/translation"
 	"gitea.dev/modules/util"
@@ -61,9 +63,8 @@ func fullIssuePatternProcessor(ctx *RenderContext, node *html.Node) {
 
 		// extract repo and org name from matched link like
 		// http://localhost:3000/gituser/myrepo/issues/1
-		linkParts := strings.Split(link, "/")
-		matchOrg := linkParts[len(linkParts)-4]
-		matchRepo := linkParts[len(linkParts)-3]
+		// or http://localhost:3000/root/child/myrepo/issues/1
+		matchOrg, matchRepo := orgRepoFromIssueLink(link)
 
 		if matchOrg == ctx.RenderOptions.Metas["user"] && matchRepo == ctx.RenderOptions.Metas["repo"] {
 			replaceContent(node, m[0], m[1], createLink(ctx, link, text, "ref-issue"))
@@ -73,6 +74,37 @@ func fullIssuePatternProcessor(ctx *RenderContext, node *html.Node) {
 		}
 		node = node.NextSibling.NextSibling
 	}
+}
+
+func orgRepoFromIssueLink(link string) (string, string) {
+	parsed, err := url.Parse(link)
+	if err != nil {
+		return legacyOrgRepo(link)
+	}
+	path := strings.Trim(parsed.Path, "/")
+	sub := strings.Trim(setting.AppSubURL, "/")
+	if sub != "" && (path == sub || strings.HasPrefix(path, sub+"/")) {
+		path = strings.Trim(strings.TrimPrefix(path, sub), "/")
+	}
+	parts := strings.Split(path, "/")
+	for i, part := range parts {
+		if part != "issues" && part != "pulls" {
+			continue
+		}
+		if i < 2 {
+			break
+		}
+		return strings.Join(parts[:i-1], "/"), parts[i-1]
+	}
+	return legacyOrgRepo(link)
+}
+
+func legacyOrgRepo(link string) (string, string) {
+	linkParts := strings.Split(link, "/")
+	if len(linkParts) < 4 {
+		return "", ""
+	}
+	return linkParts[len(linkParts)-4], linkParts[len(linkParts)-3]
 }
 
 func createIssueLinkContentWithSummary(ctx *RenderContext, linkHref string, ref *references.RenderizableReference) *html.Node {
