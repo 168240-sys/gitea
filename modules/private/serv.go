@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 
 	asymkey_model "gitea.dev/models/asymkey"
 	"gitea.dev/models/perm"
@@ -51,13 +52,21 @@ type ServCommandResults struct {
 
 // ServCommand preps for a serv call
 func ServCommand(ctx context.Context, keyID int64, ownerName, repoName string, mode perm.AccessMode, verb, lfsVerb string) (*ServCommandResults, ResponseExtra) {
+	// A subgroup repository path contains '/'. Chi takes one path segment, so the
+	// remainder travels in repo_path and the path parameter is a placeholder.
+	repoParam := repoName
+	extraQuery := ""
+	if strings.Contains(repoName, "/") {
+		repoParam = "-"
+		extraQuery = "&repo_path=" + url.QueryEscape(repoName)
+	}
 	reqURL := setting.LocalURL + fmt.Sprintf("api/internal/serv/command/%d/%s/%s?mode=%d",
 		keyID,
 		url.PathEscape(ownerName),
-		url.PathEscape(repoName),
+		url.PathEscape(repoParam),
 		mode,
 	)
-	reqURL += "&verb=" + url.QueryEscape(verb)
+	reqURL += "&verb=" + url.QueryEscape(verb) + extraQuery
 	// reqURL += "&lfs_verb=" + url.QueryEscape(lfsVerb) // TODO: actually there is no use of this parameter. In the future, the URL construction should be more flexible
 	_ = lfsVerb
 	req := newInternalRequestAPI(ctx, reqURL, "GET")

@@ -468,8 +468,10 @@ func GetIndividualUserRepoPermission(ctx context.Context, repo *repo_model.Repos
 		return perm, nil
 	}
 
-	// Admin or the owner has super access to the repository
-	if user.IsAdmin || user.ID == repo.OwnerID {
+	// Admin or the owner has super access to the repository.
+	// Owners of an ancestor organization have the same access to subgroup repositories.
+	// Grants combine by taking the highest mode; subgroups never deny a parent grant.
+	if user.IsAdmin || user.ID == repo.OwnerID || ancestorOrgOwner(ctx, repo, user) {
 		perm.AccessMode = perm_model.AccessModeOwner
 		return perm, nil
 	}
@@ -524,6 +526,18 @@ func GetIndividualUserRepoPermission(ctx context.Context, repo *repo_model.Repos
 	}
 
 	return perm, err
+}
+
+func ancestorOrgOwner(ctx context.Context, repo *repo_model.Repository, user *user_model.User) bool {
+	if user == nil || repo == nil || repo.Owner == nil || !repo.Owner.IsOrganization() || !organization.HasAnySubgroup(ctx) {
+		return false
+	}
+	ok, err := organization.IsAncestorOrganizationOwner(ctx, repo.OwnerID, user.ID)
+	if err != nil {
+		log.Error("ancestorOrgOwner: %v", err)
+		return false
+	}
+	return ok
 }
 
 func IsUserRepoAdmin(ctx context.Context, repo *repo_model.Repository, user *user_model.User) bool {

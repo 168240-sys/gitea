@@ -11,6 +11,7 @@ import (
 
 	"gitea.dev/models"
 	authmodel "gitea.dev/models/auth"
+	"gitea.dev/models/organization"
 	"gitea.dev/modules/cache"
 	"gitea.dev/modules/git"
 	"gitea.dev/modules/git/gitcmd"
@@ -170,6 +171,10 @@ func InitWebInstalled(ctx context.Context) {
 
 	// Finally start up the cron
 	cron.Init(ctx)
+}
+
+func init() {
+	web.RewriteRequestPath = organization.RewriteRequestPath
 }
 
 // NormalRoutes represents non install routes

@@ -105,6 +105,11 @@ func RenameUser(ctx context.Context, u *user_model.User, newUserName string, doe
 		u.LowerName = strings.ToLower(oldUserName)
 		return err
 	}
+	if err := organization.RefreshRoutePaths(ctx, u); err != nil {
+		u.Name = oldUserName
+		u.LowerName = strings.ToLower(oldUserName)
+		return fmt.Errorf("RenameUser: %w", err)
+	}
 
 	// Do not fail if directory does not exist
 	if err = util.RenameWithRetry(gitrepo.UserLocalPath(oldUserName), gitrepo.UserLocalPath(newUserName)); err != nil && !os.IsNotExist(err) {

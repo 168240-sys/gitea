@@ -9,6 +9,7 @@ import (
 
 	audit_model "gitea.dev/models/audit"
 	auth_model "gitea.dev/models/auth"
+	"gitea.dev/models/organization"
 	user_model "gitea.dev/models/user"
 	password_module "gitea.dev/modules/auth/password"
 	"gitea.dev/modules/optional"
@@ -155,6 +156,11 @@ func UpdateUser(ctx context.Context, u *user_model.User, opts *UpdateOptions) er
 	if opts.Visibility.Has() && opts.Visibility.Value() != u.Visibility {
 		if !u.IsOrganization() && !setting.Service.AllowedUserVisibilityModesSlice.IsAllowedVisibility(opts.Visibility.Value()) {
 			return fmt.Errorf("visibility mode not allowed: %s", opts.Visibility.Value().String())
+		}
+		if u.IsOrganization() {
+			if err := organization.CheckVisibilityChange(ctx, organization.OrgFromUser(u), opts.Visibility.Value()); err != nil {
+				return fmt.Errorf("UpdateUser: %w", err)
+			}
 		}
 		u.Visibility = opts.Visibility.Value()
 

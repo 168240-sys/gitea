@@ -28,6 +28,10 @@ type Organization struct {
 	// username of the organization
 	// deprecated
 	UserName string `json:"username"`
+	// The parent organization ID. Zero for a top-level organization.
+	ParentID int64 `json:"parent_id"`
+	// Slash-separated public path from the root organization, for example "root/child".
+	RoutePath string `json:"route_path"`
 }
 
 // OrganizationPermissions list different users permissions on an organization

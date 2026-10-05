@@ -877,6 +877,10 @@ func ToDeployKey(ctx context.Context, repo *repo_model.Repository, deployKey *de
 
 // ToOrganization convert user_model.User to api.Organization
 func ToOrganization(ctx context.Context, org *organization.Organization) *api.Organization {
+	routePath := org.RoutePath
+	if routePath == "" {
+		routePath = org.LowerName
+	}
 	return &api.Organization{
 		ID:                        org.ID,
 		AvatarURL:                 org.AsUser().AvatarLink(ctx),
@@ -889,6 +893,8 @@ func ToOrganization(ctx context.Context, org *organization.Organization) *api.Or
 		Location:                  org.Location,
 		Visibility:                api.VisibilityString(org.Visibility.String()),
 		RepoAdminChangeTeamAccess: org.RepoAdminChangeTeamAccess,
+		ParentID:                  org.ParentID,
+		RoutePath:                 routePath,
 	}
 }
 

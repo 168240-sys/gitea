@@ -4549,6 +4549,74 @@
         }
       }
     },
+    "/orgs/{org}/subgroups": {
+      "get": {
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "organization"
+        ],
+        "summary": "List an organization's subgroups",
+        "operationId": "orgListSubgroups",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "name of the organization",
+            "name": "org",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/OrganizationList"
+          }
+        }
+      },
+      "post": {
+        "description": "A subgroup is an organization nested under another organization. Its web and git path is /{org}/{subgroup}/... while /{subgroup}/{repo} keeps working. The subgroup name is unique on the instance.",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "organization"
+        ],
+        "summary": "Create a subgroup",
+        "operationId": "orgCreateSubgroup",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "name of the parent organization",
+            "name": "org",
+            "in": "path",
+            "required": true
+          },
+          {
+            "name": "organization",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/CreateOrgOption"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "$ref": "#/responses/Organization"
+          },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
+          "422": {
+            "$ref": "#/responses/validationError"
+          }
+        }
+      }
+    },
     "/orgs/{org}/teams": {
       "get": {
         "produces": [
@@ -31301,10 +31369,21 @@
           "type": "string",
           "x-go-name": "Name"
         },
+        "parent_id": {
+          "description": "The parent organization ID. Zero for a top-level organization.",
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "ParentID"
+        },
         "repo_admin_change_team_access": {
           "description": "Whether repository administrators can change team access",
           "type": "boolean",
           "x-go-name": "RepoAdminChangeTeamAccess"
+        },
+        "route_path": {
+          "description": "Slash-separated public path from the root organization, for example \"root/child\".",
+          "type": "string",
+          "x-go-name": "RoutePath"
         },
         "username": {
           "description": "username of the organization\ndeprecated",

@@ -421,6 +421,9 @@ func Edit(ctx *context.APIContext) {
 		RepoAdminChangeTeamAccess: optional.FromPtr(form.RepoAdminChangeTeamAccess),
 	}
 	if err := user_service.UpdateUser(ctx, ctx.Org.Organization.AsUser(), opts); err != nil {
+		if respondSubgroupError(ctx, err) {
+			return
+		}
 		ctx.APIErrorInternal(err)
 		return
 	}
@@ -448,6 +451,9 @@ func Delete(ctx *context.APIContext) {
 	//     "$ref": "#/responses/notFound"
 
 	if err := org.DeleteOrganization(ctx, ctx.Org.Organization, false); err != nil {
+		if respondSubgroupError(ctx, err) {
+			return
+		}
 		ctx.APIErrorInternal(err)
 		return
 	}

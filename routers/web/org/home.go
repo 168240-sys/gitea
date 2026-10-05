@@ -158,6 +158,38 @@ func home(ctx *context.Context, viewRepositories bool) {
 		return
 	}
 
+	if org.ParentID > 0 {
+		parent, err := organization.GetOrgByID(ctx, org.ParentID)
+		if err != nil {
+			ctx.ServerError("GetOrgByID", err)
+			return
+		}
+		ctx.Data["ParentOrg"] = parent
+		ctx.Data["ParentOrgLink"] = setting.AppSubURL + "/" + util.PathEscapeSegments(organization.RoutePathOrName(parent.AsUser()))
+	}
+	subOrgs, err := organization.ListVisibleChildOrgs(ctx, org.ID, ctx.Doer)
+	if err != nil {
+		ctx.ServerError("ListVisibleChildOrgs", err)
+		return
+	}
+	type subOrgView struct {
+		Name     string
+		FullName string
+		Link     string
+	}
+	subOrgViews := make([]subOrgView, 0, len(subOrgs))
+	for _, sub := range subOrgs {
+		subOrgViews = append(subOrgViews, subOrgView{
+			Name:     sub.Name,
+			FullName: sub.FullName,
+			Link:     setting.AppSubURL + "/" + util.PathEscapeSegments(organization.RoutePathOrName(sub.AsUser())),
+		})
+	}
+	ctx.Data["SubOrgs"] = subOrgViews
+
+	for _, repo := range repos {
+		repo.Owner = org.AsUser()
+	}
 	ctx.Data["Repos"] = repos
 	ctx.Data["Total"] = count
 

@@ -638,7 +638,7 @@ func repoAssignmentPrepareTemplateData(ctx *Context, data *repoAssignmentPrepare
 		return
 	}
 
-	ctx.Data["Title"] = repo.Owner.Name + "/" + repo.Name
+	ctx.Data["Title"] = repo.WebOwnerPath() + "/" + repo.Name
 	ctx.Data["PageTitleCommon"] = repo.Name + " - " + setting.AppName
 	ctx.Data["Repository"] = repo
 	ctx.Data["Owner"] = ctx.Repo.Repository.Owner

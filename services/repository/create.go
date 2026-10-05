@@ -225,6 +225,16 @@ func CreateRepositoryDirectly(ctx context.Context, doer, owner *user_model.User,
 		return nil, fmt.Errorf("unsupported object format: %s", opts.ObjectFormatName)
 	}
 
+	// A repository and a subgroup cannot share a name: both would occupy /owner/<name>.
+	if owner.IsOrganization() {
+		taken, err := organization.HasChildOrg(ctx, owner.ID, opts.Name)
+		if err != nil {
+			return nil, fmt.Errorf("CreateRepositoryDirectly: %w", err)
+		} else if taken {
+			return nil, repo_model.ErrRepoAlreadyExist{Uname: owner.Name, Name: opts.Name}
+		}
+	}
+
 	repo := &repo_model.Repository{
 		OwnerID:                         owner.ID,
 		Owner:                           owner,

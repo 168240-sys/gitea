@@ -160,6 +160,11 @@ type User struct {
 	NumMembers int
 	Visibility structs.VisibleType `xorm:"NOT NULL DEFAULT 0"`
 
+	// ParentID is the parent organization of a subgroup. Zero for users and top-level organizations.
+	ParentID int64 `xorm:"INDEX NOT NULL DEFAULT 0"`
+	// RoutePath is the slash-separated public path ("root/child"). Empty means "same as LowerName".
+	RoutePath string `xorm:"VARCHAR(512) INDEX"`
+
 	// Introduced by "Add teams to repo on collaboration page. (#8045)"
 	// Whether a repo admin can add/remove a team to/from the repo on the collaboration page
 	RepoAdminChangeTeamAccess bool `xorm:"NOT NULL DEFAULT false"`
@@ -222,6 +227,15 @@ func (u *User) BeforeUpdate() {
 	u.Location = util.TruncateRunes(u.Location, 255)
 	u.Website = util.TruncateRunes(u.Website, 255)
 	u.Description = util.TruncateRunes(u.Description, 255)
+}
+
+// BeforeInsert is invoked from XORM before inserting this object.
+func (u *User) BeforeInsert() {
+	// Root users and top-level orgs keep a route path equal to the login name.
+	// Subgroups set RoutePath explicitly (it contains '/'); do not overwrite it.
+	if u.RoutePath == "" && u.ParentID == 0 && u.Name != "" {
+		u.RoutePath = strings.ToLower(u.Name)
+	}
 }
 
 // AfterLoad is invoked from XORM after filling all the fields of this object.
@@ -337,7 +351,18 @@ func (u *User) SettingsLink() string {
 	return setting.AppSubURL + "/user/settings"
 }
 
+// PublicWebPath returns the browser path for this user or organization, without a leading slash.
+// Top-level accounts use their name. Subgroups use the nested route ("root/child").
+func (u *User) PublicWebPath() string {
+	if strings.Contains(u.RoutePath, "/") {
+		return u.RoutePath
+	}
+	return u.Name
+}
+
 // HomeLink returns the user or organization home page link.
+// Kept as a single path segment so existing "/{name}/-/" routes (packages, projects) stay valid.
+// Subgroup repos use PublicWebPath via Repository.Link; "/root/child" still resolves to this org.
 func (u *User) HomeLink() string {
 	return setting.AppSubURL + "/" + url.PathEscape(u.Name)
 }

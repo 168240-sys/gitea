@@ -10,6 +10,7 @@ import (
 	"net/url"
 
 	"gitea.dev/models/db"
+	"gitea.dev/models/organization"
 	packages_model "gitea.dev/models/packages"
 	repo_model "gitea.dev/models/repo"
 	user_model "gitea.dev/models/user"
@@ -256,6 +257,10 @@ func SettingsChangeVisibilityPost(ctx *context.Context) {
 	}
 
 	if err := org_service.ChangeOrganizationVisibility(ctx, ctx.Org.Organization, visibility); err != nil {
+		if subgroupErr, ok := errors.AsType[organization.ErrSubgroup](err); ok {
+			ctx.JSONError(ctx.Tr("org.subgroup.err_" + subgroupErr.Code))
+			return
+		}
 		log.Error("ChangeOrganizationVisibility: %v", err)
 		ctx.JSONError(ctx.Tr("error.occurred"))
 		return

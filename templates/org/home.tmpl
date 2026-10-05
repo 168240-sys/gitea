@@ -55,6 +55,31 @@
 				</div>
 				{{end}}
 
+				{{if or .SubOrgs .IsOrganizationOwner}}
+					<h4 class="ui top attached header flex-left-right">
+						<strong>{{ctx.Locale.Tr "org.subgroups"}}</strong>
+					</h4>
+					<div class="ui attached segment">
+						{{if .SubOrgs}}
+							<div class="flex-relaxed-list">
+							{{range .SubOrgs}}
+								<div>
+									<a href="{{.Link}}"><strong>{{.Name}}</strong></a>
+									{{if .FullName}}<p class="tw-text-text-light">{{.FullName}}</p>{{end}}
+								</div>
+							{{end}}
+							</div>
+						{{else}}
+							<p class="tw-text-text-light">{{ctx.Locale.Tr "org.subgroups.empty"}}</p>
+						{{end}}
+					</div>
+					{{if .IsOrganizationOwner}}
+						<div class="ui bottom attached segment">
+							<a class="ui primary small button" href="{{.OrgLink}}/subgroups/new">{{ctx.Locale.Tr "org.subgroup.new"}}</a>
+						</div>
+					{{end}}
+				{{end}}
+
 				{{if .NumMembers}}
 					<h4 class="ui top attached header flex-left-right">
 						<strong>{{ctx.Locale.Tr "org.members"}}</strong>

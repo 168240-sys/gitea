@@ -1831,6 +1831,8 @@ func Routes() *web.Router {
 				m.Delete("", org.DeleteAvatar)
 			}, reqToken(), reqOrgOwnership())
 			m.Get("/activities/feeds", org.ListOrgActivityFeeds)
+			m.Get("/subgroups", org.ListSubgroups)
+			m.Post("/subgroups", reqToken(), reqOrgOwnership(), bind(api.CreateOrgOption{}), org.CreateSubgroup)
 
 			m.Group("/blocks", func() {
 				m.Get("", org.ListBlocks)

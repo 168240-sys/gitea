@@ -319,6 +319,9 @@ func CreateOrganization(ctx context.Context, org *Organization, owner *user_mode
 	}
 
 	org.LowerName = strings.ToLower(org.Name)
+	if org.RoutePath == "" {
+		org.RoutePath = org.LowerName
+	}
 	if org.Rands, err = user_model.GetUserSalt(); err != nil {
 		return err
 	}
@@ -454,10 +457,27 @@ func ownerVisibilitySatisfiesDoer(orgOrUser, user *user_model.User) bool {
 	return orgOrUser.Visibility != structs.VisibleTypePrivate && !user.IsRestricted
 }
 
-// HasOrgOrUserVisible tells if the given user can see the given org or user
+// HasOrgOrUserVisible tells if the given user can see the given org or user.
+// Owners of an ancestor organization can see private subgroups.
 func HasOrgOrUserVisible(ctx context.Context, owner, doer *user_model.User) bool {
-	return ownerVisibilitySatisfiesDoer(owner, doer) ||
-		(doer != nil && OrgFromUser(owner).HasMemberWithUserID(ctx, doer.ID))
+	if ownerVisibilitySatisfiesDoer(owner, doer) {
+		return true
+	}
+	if doer == nil || doer.IsGhost() || owner == nil || !owner.IsOrganization() {
+		return false
+	}
+	if OrgFromUser(owner).HasMemberWithUserID(ctx, doer.ID) {
+		return true
+	}
+	if !HasAnySubgroup(ctx) {
+		return false
+	}
+	ok, err := IsOrganizationOwner(ctx, owner.ID, doer.ID)
+	if err != nil {
+		log.Error("HasOrgOrUserVisible: %v", err)
+		return false
+	}
+	return ok
 }
 
 // HasOrgsVisible tells if the given user can see at least one of the orgs provided

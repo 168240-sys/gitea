@@ -8222,10 +8222,21 @@
             "type": "string",
             "x-go-name": "Name"
           },
+          "parent_id": {
+            "description": "The parent organization ID. Zero for a top-level organization.",
+            "format": "int64",
+            "type": "integer",
+            "x-go-name": "ParentID"
+          },
           "repo_admin_change_team_access": {
             "description": "Whether repository administrators can change team access",
             "type": "boolean",
             "x-go-name": "RepoAdminChangeTeamAccess"
+          },
+          "route_path": {
+            "description": "Slash-separated public path from the root organization, for example \"root/child\".",
+            "type": "string",
+            "x-go-name": "RoutePath"
           },
           "username": {
             "deprecated": true,
@@ -15804,6 +15815,72 @@
           }
         },
         "summary": "Create a repository in an organization",
+        "tags": [
+          "organization"
+        ]
+      }
+    },
+    "/orgs/{org}/subgroups": {
+      "get": {
+        "operationId": "orgListSubgroups",
+        "parameters": [
+          {
+            "description": "name of the organization",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OrganizationList"
+          }
+        },
+        "summary": "List an organization's subgroups",
+        "tags": [
+          "organization"
+        ]
+      },
+      "post": {
+        "description": "A subgroup is an organization nested under another organization. Its web and git path is /{org}/{subgroup}/... while /{subgroup}/{repo} keeps working. The subgroup name is unique on the instance.",
+        "operationId": "orgCreateSubgroup",
+        "parameters": [
+          {
+            "description": "name of the parent organization",
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOrgOption"
+              }
+            }
+          },
+          "required": true,
+          "x-originalParamName": "organization"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Organization"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/validationError"
+          }
+        },
+        "summary": "Create a subgroup",
         "tags": [
           "organization"
         ]

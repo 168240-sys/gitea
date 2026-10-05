@@ -63,8 +63,58 @@ func GetUserOrganizations(ctx context.Context, uid int64) (ret []*Organization, 
 	return ret, err
 }
 
-// IsOrganizationOwner returns true if given user is in the owner team.
+// IsOrganizationOwner returns true if given user is in the owner team,
+// or is an owner of an ancestor organization. Ancestor owners administer the
+// whole tree. Access is only ever added this way; nothing here denies a grant.
 func IsOrganizationOwner(ctx context.Context, orgID, uid int64) (bool, error) {
+	return isOrganizationOwner(ctx, orgID, uid, 0)
+}
+
+// IsAncestorOrganizationOwner reports whether uid owns a parent of orgID.
+// Direct owners are excluded so the existing team lookup still fills their permissions.
+func IsAncestorOrganizationOwner(ctx context.Context, orgID, uid int64) (bool, error) {
+	if orgID <= 0 || uid <= 0 || !HasAnySubgroup(ctx) {
+		return false, nil
+	}
+	org, err := GetOrgByID(ctx, orgID)
+	if err != nil {
+		if IsErrOrgNotExist(err) || user_model.IsErrUserNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("IsAncestorOrganizationOwner: %w", err)
+	}
+	if org.ParentID == 0 {
+		return false, nil
+	}
+	return IsOrganizationOwner(ctx, org.ParentID, uid)
+}
+
+func isOrganizationOwner(ctx context.Context, orgID, uid int64, depth int) (bool, error) {
+	if orgID <= 0 || uid <= 0 || depth > MaxSubgroupDepth+1 {
+		return false, nil
+	}
+	ok, err := isDirectOrganizationOwner(ctx, orgID, uid)
+	if err != nil || ok {
+		return ok, err
+	}
+	// Skip the parent walk when the instance has no subgroups.
+	if depth == 0 && !HasAnySubgroup(ctx) {
+		return false, nil
+	}
+	org, err := GetOrgByID(ctx, orgID)
+	if err != nil {
+		if IsErrOrgNotExist(err) || user_model.IsErrUserNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("isOrganizationOwner: %w", err)
+	}
+	if org.ParentID == 0 {
+		return false, nil
+	}
+	return isOrganizationOwner(ctx, org.ParentID, uid, depth+1)
+}
+
+func isDirectOrganizationOwner(ctx context.Context, orgID, uid int64) (bool, error) {
 	ownerTeam, err := GetOwnerTeam(ctx, orgID)
 	if err != nil {
 		if IsErrTeamNotExist(err) {
@@ -95,8 +145,18 @@ func IsPublicMembership(ctx context.Context, orgID, uid int64) (bool, error) {
 		Exist()
 }
 
-// CanCreateOrgRepo returns true if user can create repo in organization
+// CanCreateOrgRepo returns true if user can create repo in organization.
+// Ancestor organization owners can, because they administer the subgroup.
 func CanCreateOrgRepo(ctx context.Context, orgID, uid int64) (bool, error) {
+	if HasAnySubgroup(ctx) {
+		isOwner, err := IsOrganizationOwner(ctx, orgID, uid)
+		if err != nil {
+			return false, fmt.Errorf("CanCreateOrgRepo: %w", err)
+		}
+		if isOwner {
+			return true, nil
+		}
+	}
 	return db.GetEngine(ctx).
 		Where(builder.Eq{"team.can_create_org_repo": true}.Or(builder.Eq{"team.authorize": perm.AccessModeOwner})).
 		Join("INNER", "team_user", "team_user.team_id = team.id").

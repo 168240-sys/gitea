@@ -555,9 +555,18 @@ func (repo *Repository) IsGenerated() bool {
 	return repo.TemplateID != 0
 }
 
+// WebOwnerPath is the URL owner segment. Subgroup repositories use the nested
+// route ("root/child"); every other repository keeps the flat owner name.
+func (repo *Repository) WebOwnerPath() string {
+	if repo.Owner != nil && strings.Contains(repo.Owner.RoutePath, "/") {
+		return repo.Owner.RoutePath
+	}
+	return repo.OwnerName
+}
+
 // Link returns the repository relative url
 func (repo *Repository) Link() string {
-	return setting.AppSubURL + "/" + url.PathEscape(repo.OwnerName) + "/" + url.PathEscape(repo.Name)
+	return setting.AppSubURL + "/" + util.PathEscapeSegments(repo.WebOwnerPath()) + "/" + url.PathEscape(repo.Name)
 }
 
 // ComposeCompareURL returns the repository comparison URL
@@ -611,7 +620,7 @@ type CloneLink struct {
 
 // ComposeHTTPSCloneURL returns HTTPS clone URL based on the given owner and repository name.
 func ComposeHTTPSCloneURL(ctx context.Context, owner, repo string) string {
-	return fmt.Sprintf("%s%s/%s.git", httplib.GuessCurrentAppURL(ctx), url.PathEscape(owner), url.PathEscape(repo))
+	return fmt.Sprintf("%s%s/%s.git", httplib.GuessCurrentAppURL(ctx), util.PathEscapeSegments(owner), url.PathEscape(repo))
 }
 
 // ComposeSSHCloneURL returns SSH clone URL based on the given owner and repository name.
@@ -634,7 +643,7 @@ func ComposeSSHCloneURL(doer *user_model.User, ownerName, repoName string) strin
 	// non-standard port, it must use full URI
 	if setting.SSH.Port != 22 {
 		sshHost := net.JoinHostPort(sshDomain, strconv.Itoa(setting.SSH.Port))
-		return fmt.Sprintf("ssh://%s@%s/%s/%s.git", sshUser, sshHost, url.PathEscape(ownerName), url.PathEscape(repoName))
+		return fmt.Sprintf("ssh://%s@%s/%s/%s.git", sshUser, sshHost, util.PathEscapeSegments(ownerName), url.PathEscape(repoName))
 	}
 
 	// for standard port, it can use a shorter URI (without the port)
@@ -643,14 +652,14 @@ func ComposeSSHCloneURL(doer *user_model.User, ownerName, repoName string) strin
 		sshHost = "[" + sshHost + "]" // for IPv6 address, wrap it with brackets
 	}
 	if setting.Repository.UseCompatSSHURI {
-		return fmt.Sprintf("ssh://%s@%s/%s/%s.git", sshUser, sshHost, url.PathEscape(ownerName), url.PathEscape(repoName))
+		return fmt.Sprintf("ssh://%s@%s/%s/%s.git", sshUser, sshHost, util.PathEscapeSegments(ownerName), url.PathEscape(repoName))
 	}
-	return fmt.Sprintf("%s@%s:%s/%s.git", sshUser, sshHost, url.PathEscape(ownerName), url.PathEscape(repoName))
+	return fmt.Sprintf("%s@%s:%s/%s.git", sshUser, sshHost, util.PathEscapeSegments(ownerName), url.PathEscape(repoName))
 }
 
 // ComposeTeaCloneCommand returns Tea CLI clone command based on the given owner and repository name.
 func ComposeTeaCloneCommand(ctx context.Context, owner, repo string) string {
-	return fmt.Sprintf("tea clone %s/%s", url.PathEscape(owner), url.PathEscape(repo))
+	return fmt.Sprintf("tea clone %s/%s", util.PathEscapeSegments(owner), url.PathEscape(repo))
 }
 
 func (repo *Repository) cloneLink(ctx context.Context, doer *user_model.User, repoPathName string) *CloneLink {
@@ -658,9 +667,9 @@ func (repo *Repository) cloneLink(ctx context.Context, doer *user_model.User, re
 		IsWikiRepo:   strings.HasSuffix(repoPathName, ".wiki"),
 		SupportHTTPS: !setting.Repository.DisableHTTPGit,
 		SupportSSH:   !setting.SSH.Disabled && (doer != nil || setting.SSH.ExposeAnonymous),
-		SSH:          ComposeSSHCloneURL(doer, repo.OwnerName, repoPathName),
-		HTTPS:        ComposeHTTPSCloneURL(ctx, repo.OwnerName, repoPathName),
-		Tea:          ComposeTeaCloneCommand(ctx, repo.OwnerName, repoPathName),
+		SSH:          ComposeSSHCloneURL(doer, repo.WebOwnerPath(), repoPathName),
+		HTTPS:        ComposeHTTPSCloneURL(ctx, repo.WebOwnerPath(), repoPathName),
+		Tea:          ComposeTeaCloneCommand(ctx, repo.WebOwnerPath(), repoPathName),
 	}
 }
 
