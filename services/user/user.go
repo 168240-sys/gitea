@@ -73,13 +73,43 @@ func RenameUser(ctx context.Context, u *user_model.User, newUserName string, doe
 	}
 	defer committer.Close()
 
-	isExist, err := user_model.IsUserExist(ctx, u.ID, newUserName)
-	if err != nil {
-		return err
+	newLower := strings.ToLower(newUserName)
+	if u.ParentID == 0 {
+		isExist, err := user_model.IsUserExist(ctx, u.ID, newUserName)
+		if err != nil {
+			return err
+		}
+		if isExist {
+			return user_model.ErrUserAlreadyExist{Name: newUserName}
+		}
+	} else if !strings.EqualFold(newUserName, oldUserName) {
+		taken, err := organization.SiblingLowerNameTaken(ctx, u.ParentID, u.ID, newUserName)
+		if err != nil {
+			return fmt.Errorf("RenameUser: %w", err)
+		}
+		if taken {
+			return user_model.ErrUserAlreadyExist{Name: newUserName}
+		}
+		conflict, err := organization.RepoNameConflicts(ctx, u.ParentID, newUserName)
+		if err != nil {
+			return fmt.Errorf("RenameUser: %w", err)
+		}
+		if conflict {
+			return user_model.ErrUserAlreadyExist{Name: newUserName}
+		}
 	}
-	if isExist {
-		return user_model.ErrUserAlreadyExist{
-			Name: newUserName,
+
+	oldDisk := u.StorageName()
+	newDisk := oldDisk
+	if u.ParentID == 0 {
+		newDisk = newLower
+	} else if strings.EqualFold(oldDisk, u.LowerName) {
+		taken, err := user_model.DiskNameTaken(ctx, u.ID, newLower)
+		if err != nil {
+			return fmt.Errorf("RenameUser: %w", err)
+		}
+		if !taken {
+			newDisk = newLower
 		}
 	}
 
@@ -87,8 +117,11 @@ func RenameUser(ctx context.Context, u *user_model.User, newUserName string, doe
 		return err
 	}
 
-	if err = user_model.NewUserRedirect(ctx, u.ID, oldUserName, newUserName); err != nil {
-		return err
+	// Root renames keep the global user_redirect row. Subgroup paths use org_route_redirect.
+	if u.ParentID == 0 {
+		if err = user_model.NewUserRedirect(ctx, u.ID, oldUserName, newUserName); err != nil {
+			return err
+		}
 	}
 
 	if err := agit.UserNameChanged(ctx, u, newUserName); err != nil {
@@ -99,31 +132,43 @@ func RenameUser(ctx context.Context, u *user_model.User, newUserName string, doe
 	}
 
 	u.Name = newUserName
-	u.LowerName = strings.ToLower(newUserName)
-	if err := user_model.UpdateUserCols(ctx, u, "name", "lower_name"); err != nil {
+	u.LowerName = newLower
+	u.DiskName = newDisk
+	u.NamespaceKey = user_model.NamespaceKeyFor(u.ParentID, newLower)
+	if err := user_model.UpdateUserCols(ctx, u, "name", "lower_name", "disk_name", "namespace_key"); err != nil {
 		u.Name = oldUserName
 		u.LowerName = strings.ToLower(oldUserName)
+		u.DiskName = oldDisk
+		u.NamespaceKey = user_model.NamespaceKeyFor(u.ParentID, u.LowerName)
 		return err
 	}
 	if err := organization.RefreshRoutePaths(ctx, u); err != nil {
 		u.Name = oldUserName
 		u.LowerName = strings.ToLower(oldUserName)
+		u.DiskName = oldDisk
 		return fmt.Errorf("RenameUser: %w", err)
 	}
 
-	// Do not fail if directory does not exist
-	if err = util.RenameWithRetry(gitrepo.UserLocalPath(oldUserName), gitrepo.UserLocalPath(newUserName)); err != nil && !os.IsNotExist(err) {
-		u.Name = oldUserName
-		u.LowerName = strings.ToLower(oldUserName)
-		return fmt.Errorf("rename user directory: %w", err)
+	renamedDir := newDisk != oldDisk
+	if renamedDir {
+		// Do not fail if directory does not exist
+		if err = util.RenameWithRetry(gitrepo.UserLocalPath(oldDisk), gitrepo.UserLocalPath(newDisk)); err != nil && !os.IsNotExist(err) {
+			u.Name = oldUserName
+			u.LowerName = strings.ToLower(oldUserName)
+			u.DiskName = oldDisk
+			return fmt.Errorf("rename user directory: %w", err)
+		}
 	}
 
 	if err = committer.Commit(); err != nil {
 		u.Name = oldUserName
 		u.LowerName = strings.ToLower(oldUserName)
-		if err2 := util.RenameWithRetry(gitrepo.UserLocalPath(newUserName), gitrepo.UserLocalPath(oldUserName)); err2 != nil && !os.IsNotExist(err2) {
-			log.Error("Unable to rollback directory change during failed username change from: %s to: %s. DB Error: %v. Filesystem Error: %v", oldUserName, newUserName, err, err2)
-			return fmt.Errorf("failed to rollback directory change during failed username change from: %s to: %s. DB Error: %w. Filesystem Error: %v", oldUserName, newUserName, err, err2)
+		u.DiskName = oldDisk
+		if renamedDir {
+			if err2 := util.RenameWithRetry(gitrepo.UserLocalPath(newDisk), gitrepo.UserLocalPath(oldDisk)); err2 != nil && !os.IsNotExist(err2) {
+				log.Error("Unable to rollback directory change during failed username change from: %s to: %s. DB Error: %v. Filesystem Error: %v", oldUserName, newUserName, err, err2)
+				return fmt.Errorf("failed to rollback directory change during failed username change from: %s to: %s. DB Error: %w. Filesystem Error: %v", oldUserName, newUserName, err, err2)
+			}
 		}
 		return err
 	}
@@ -280,7 +325,7 @@ func DeleteUser(ctx context.Context, u *user_model.User, purge bool) error {
 	}
 
 	// Note: There are something just cannot be roll back, so just keep error logs of those operations.
-	path := gitrepo.UserLocalPath(u.Name)
+	path := gitrepo.UserLocalPath(u.StorageName())
 	if err := util.RemoveAllWithRetry(path); err != nil {
 		err = fmt.Errorf("failed to RemoveAll %s: %w", path, err)
 		_ = system_model.CreateNotice(ctx, system_model.NoticeTask, fmt.Sprintf("delete user '%s': %v", u.Name, err))

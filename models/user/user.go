@@ -94,9 +94,15 @@ const (
 // User represents the object of individual and member of organization.
 type User struct {
 	ID        int64  `xorm:"pk autoincr"`
-	LowerName string `xorm:"UNIQUE NOT NULL"`
-	Name      string `xorm:"UNIQUE NOT NULL"`
-	FullName  string
+	LowerName string `xorm:"INDEX NOT NULL"`
+	Name      string `xorm:"INDEX NOT NULL"`
+	// DiskName is the unique git-directory and router key. Roots use the lower name.
+	// A subgroup whose lower name is already taken uses subgroup-{id} instead.
+	DiskName string `xorm:"UNIQUE NOT NULL"`
+	// NamespaceKey is "{parentID}/{lowerName}". It keeps sibling and login names unique
+	// after lower_name itself is allowed to repeat under different parents.
+	NamespaceKey string `xorm:"UNIQUE VARCHAR(512) NOT NULL"`
+	FullName     string
 	// Email is the primary email address (to be used for communication)
 	Email                        string `xorm:"NOT NULL"`
 	KeepEmailPrivate             bool
@@ -224,6 +230,9 @@ func (u *User) BeforeUpdate() {
 	}
 
 	u.LowerName = strings.ToLower(u.Name)
+	if u.Name != "" {
+		u.NamespaceKey = NamespaceKeyFor(u.ParentID, u.LowerName)
+	}
 	u.Location = util.TruncateRunes(u.Location, 255)
 	u.Website = util.TruncateRunes(u.Website, 255)
 	u.Description = util.TruncateRunes(u.Description, 255)
@@ -231,11 +240,56 @@ func (u *User) BeforeUpdate() {
 
 // BeforeInsert is invoked from XORM before inserting this object.
 func (u *User) BeforeInsert() {
+	if u.Name != "" && u.LowerName == "" {
+		u.LowerName = strings.ToLower(u.Name)
+	}
+	// Copied rows keep the source disk name and namespace key. A new insert follows this row's name.
+	// pending- is the temporary key used while a colliding subgroup is inserted.
+	if u.LowerName != "" && !strings.HasPrefix(u.DiskName, "pending-") && !strings.EqualFold(u.DiskName, u.LowerName) {
+		u.DiskName = u.LowerName
+	}
+	if u.DiskName == "" {
+		u.DiskName = u.LowerName
+	}
+	if u.LowerName != "" {
+		u.NamespaceKey = NamespaceKeyFor(u.ParentID, u.LowerName)
+	}
 	// Root users and top-level orgs keep a route path equal to the login name.
 	// Subgroups set RoutePath explicitly (it contains '/'); do not overwrite it.
-	if u.RoutePath == "" && u.ParentID == 0 && u.Name != "" {
-		u.RoutePath = strings.ToLower(u.Name)
+	if u.ParentID == 0 && u.LowerName != "" && !strings.Contains(u.RoutePath, "/") {
+		u.RoutePath = u.LowerName
 	}
+}
+
+// NamespaceKeyFor is the uniqueness key of a login or a sibling organization name.
+func NamespaceKeyFor(parentID int64, lowerName string) string {
+	return strconv.FormatInt(parentID, 10) + "/" + lowerName
+}
+
+// StorageName is the on-disk directory and the chi username. Empty disk names fall back to the lower name.
+func (u *User) StorageName() string {
+	if u == nil {
+		return ""
+	}
+	if u.DiskName != "" {
+		return u.DiskName
+	}
+	if u.LowerName != "" {
+		return u.LowerName
+	}
+	return strings.ToLower(u.Name)
+}
+
+// RouterName is the single URL segment that addresses this account.
+// It differs from Name only when a subgroup's local name was already used as a disk name.
+func (u *User) RouterName() string {
+	if u == nil {
+		return ""
+	}
+	if u.DiskName != "" && !strings.EqualFold(u.DiskName, u.Name) {
+		return u.DiskName
+	}
+	return u.Name
 }
 
 // AfterLoad is invoked from XORM after filling all the fields of this object.
@@ -364,7 +418,16 @@ func (u *User) PublicWebPath() string {
 // Kept as a single path segment so existing "/{name}/-/" routes (packages, projects) stay valid.
 // Subgroup repos use PublicWebPath via Repository.Link; "/root/child" still resolves to this org.
 func (u *User) HomeLink() string {
-	return setting.AppSubURL + "/" + url.PathEscape(u.Name)
+	return setting.AppSubURL + "/" + url.PathEscape(u.RouterName())
+}
+
+// ScopedLink is the public link, including the nested route of a subgroup.
+// HomeLink stays a single segment so "/{name}/-/" handlers do not redirect-loop.
+func (u *User) ScopedLink() string {
+	if strings.Contains(u.RoutePath, "/") {
+		return setting.AppSubURL + "/" + util.PathEscapeSegments(u.RoutePath)
+	}
+	return u.HomeLink()
 }
 
 // HTMLURL returns the user or organization's full link.
@@ -374,7 +437,7 @@ func (u *User) HTMLURL(ctx context.Context) string {
 
 // OrganisationLink returns the organization sub page link.
 func (u *User) OrganisationLink() string {
-	return setting.AppSubURL + "/org/" + url.PathEscape(u.Name)
+	return setting.AppSubURL + "/org/" + url.PathEscape(u.RouterName())
 }
 
 // GetUserFollowers returns range of user's followers.
@@ -567,9 +630,57 @@ func IsUserExist(ctx context.Context, uid int64, name string) (bool, error) {
 	if len(name) == 0 {
 		return false, nil
 	}
+	lower := strings.ToLower(name)
+	// A root login is taken when that lower name is already a root, or when it is
+	// already some account's disk name. A subgroup may reuse the lower name.
 	return db.GetEngine(ctx).
-		Where("id!=?", uid).
-		Get(&User{LowerName: strings.ToLower(name)})
+		Where("id != ?", uid).
+		And(builder.Or(
+			builder.And(builder.Eq{"parent_id": 0}, builder.Eq{"lower_name": lower}),
+			builder.Eq{"disk_name": lower},
+		)).
+		Exist(new(User))
+}
+
+// DiskNameTaken reports whether any other account already uses name as its disk name.
+func DiskNameTaken(ctx context.Context, exceptID int64, name string) (bool, error) {
+	if name == "" {
+		return false, nil
+	}
+	return db.GetEngine(ctx).
+		Where("id != ?", exceptID).
+		Exist(&User{DiskName: strings.ToLower(name)})
+}
+
+// AllocateDiskName returns the lower name when it is free, otherwise a temporary unique key
+// that FinalizeDiskName replaces with subgroup-{id} after insert.
+func AllocateDiskName(ctx context.Context, exceptID int64, name string) (string, error) {
+	lower := strings.ToLower(name)
+	taken, err := DiskNameTaken(ctx, exceptID, lower)
+	if err != nil || !taken {
+		return lower, err
+	}
+	return "pending-" + hex.EncodeToString(util.CryptoRandomBytes(8)), nil
+}
+
+// FinalizeDiskName replaces a temporary disk name with subgroup-{id} once the row has an id.
+func FinalizeDiskName(ctx context.Context, u *User) error {
+	if u == nil || !strings.HasPrefix(u.DiskName, "pending-") {
+		return nil
+	}
+	disk := fmt.Sprintf("subgroup-%d", u.ID)
+	taken, err := DiskNameTaken(ctx, u.ID, disk)
+	if err != nil {
+		return fmt.Errorf("FinalizeDiskName: %w", err)
+	}
+	if taken {
+		disk = fmt.Sprintf("subgroup-%d-x", u.ID)
+	}
+	u.DiskName = disk
+	if err := UpdateUserCols(ctx, u, "disk_name"); err != nil {
+		return fmt.Errorf("FinalizeDiskName: %w", err)
+	}
+	return nil
 }
 
 // SaltByteLength as of the beginning of 2022, it is recommended to use at least
@@ -1108,8 +1219,24 @@ func GetPossibleUserByIDs(ctx context.Context, ids []int64) ([]*User, error) {
 }
 
 func getUserByNameWithTypes(ctx context.Context, name string, types ...UserType) (*User, error) {
+	lower := strings.ToLower(name)
+	if lower == "" {
+		return nil, ErrUserNotExist{Name: name}
+	}
+	users := make([]*User, 0, 2)
+	sess := db.GetEngine(ctx).Where("lower_name = ?", lower)
+	if len(types) > 0 {
+		sess.In("`type`", types)
+	}
+	if err := sess.Find(&users); err != nil {
+		return nil, err
+	}
+	if u := preferRootUser(users); u != nil {
+		return u, nil
+	}
+	// disk_name is the unique router key, including subgroup-{id} for a colliding local name.
 	u := &User{}
-	sess := db.GetEngine(ctx).Where(builder.Eq{"lower_name": strings.ToLower(name)})
+	sess = db.GetEngine(ctx).Where("disk_name = ?", lower)
 	if len(types) > 0 {
 		sess.In("`type`", types)
 	}
@@ -1122,13 +1249,49 @@ func getUserByNameWithTypes(ctx context.Context, name string, types ...UserType)
 	return u, nil
 }
 
+// preferRootUser returns the parent_id 0 row when one exists, otherwise the only match.
+// Several subgroups and no root is ambiguous: the caller must use a route or a disk name.
+func preferRootUser(users []*User) *User {
+	var root *User
+	for _, u := range users {
+		if u.ParentID != 0 {
+			continue
+		}
+		if root != nil {
+			return nil
+		}
+		root = u
+	}
+	if root != nil {
+		return root
+	}
+	if len(users) == 1 {
+		return users[0]
+	}
+	return nil
+}
+
 // GetUserByName returns the user object by given name, any user type.
 func GetUserByName(ctx context.Context, name string) (*User, error) {
 	return getUserByNameWithTypes(ctx, name)
 }
 
+// GetIndividualUserByName returns the root individual account. Subgroups never match a login.
 func GetIndividualUserByName(ctx context.Context, name string) (*User, error) {
-	return getUserByNameWithTypes(ctx, name, UserTypeIndividual)
+	if len(name) == 0 {
+		return nil, ErrUserNotExist{Name: name}
+	}
+	u, has, err := db.Get[User](ctx, builder.Eq{
+		"lower_name": strings.ToLower(name),
+		"parent_id":  0,
+		"`type`":     UserTypeIndividual,
+	})
+	if err != nil {
+		return nil, err
+	} else if !has {
+		return nil, ErrUserNotExist{Name: name}
+	}
+	return u, nil
 }
 
 // GetUserEmailsByNames returns a list of e-mails corresponds to names of users

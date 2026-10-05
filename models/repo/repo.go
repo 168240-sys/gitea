@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"gitea.dev/models/db"
+	"gitea.dev/models/organization"
 	"gitea.dev/models/unit"
 	user_model "gitea.dev/models/user"
 	"gitea.dev/modules/git"
@@ -743,20 +744,35 @@ func (err ErrRepoNotExist) Unwrap() error {
 	return util.ErrNotExist
 }
 
-// GetRepositoryByOwnerAndName returns the repository by given owner name and repo name
+// GetRepositoryByOwnerAndName returns the repository by given owner name and repo name.
+// ownerName may be a nested route ("root/child") or a single login/disk name.
 func GetRepositoryByOwnerAndName(ctx context.Context, ownerName, repoName string) (*Repository, error) {
-	var repo Repository
-	has, err := db.GetEngine(ctx).Table("repository").Select("repository.*").
-		Join("INNER", "`user`", "`user`.id = repository.owner_id").
-		Where("repository.lower_name = ?", strings.ToLower(repoName)).
-		And("`user`.lower_name = ?", strings.ToLower(ownerName)).
-		Get(&repo)
-	if err != nil {
-		return nil, err
-	} else if !has {
-		return nil, ErrRepoNotExist{0, 0, ownerName, repoName}
+	ownerName = strings.Trim(ownerName, "/")
+	var ownerID int64
+	if strings.Contains(ownerName, "/") {
+		org, err := organization.GetOrgByRoutePath(ctx, ownerName)
+		if err != nil {
+			if organization.IsErrOrgNotExist(err) {
+				return nil, ErrRepoNotExist{0, 0, ownerName, repoName}
+			}
+			return nil, err
+		}
+		ownerID = org.ID
+	} else {
+		owner, err := user_model.GetUserByName(ctx, ownerName)
+		if err != nil {
+			if user_model.IsErrUserNotExist(err) {
+				return nil, ErrRepoNotExist{0, 0, ownerName, repoName}
+			}
+			return nil, err
+		}
+		ownerID = owner.ID
 	}
-	return &repo, nil
+	repo, err := GetRepositoryByName(ctx, ownerID, repoName)
+	if err != nil && IsErrRepoNotExist(err) {
+		return nil, ErrRepoNotExist{0, ownerID, ownerName, repoName}
+	}
+	return repo, err
 }
 
 // GetRepositoryByName returns the repository by given name under user if exists.

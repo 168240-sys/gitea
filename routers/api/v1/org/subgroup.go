@@ -48,7 +48,7 @@ func CreateSubgroup(ctx *context.APIContext) {
 	// swagger:operation POST /orgs/{org}/subgroups organization orgCreateSubgroup
 	// ---
 	// summary: Create a subgroup
-	// description: A subgroup is an organization nested under another organization. Its web and git path is /{org}/{subgroup}/... while /{subgroup}/{repo} keeps working. The subgroup name is unique on the instance.
+	// description: A subgroup is an organization nested under another organization. Its web and git path is /{org}/{subgroup}/... The local name only has to be unique under that parent. A colliding name is reached through the nested path; its flat URL uses a generated disk name.
 	// consumes:
 	// - application/json
 	// produces:
@@ -99,6 +99,143 @@ func CreateSubgroup(ctx *context.APIContext) {
 		return
 	}
 	ctx.JSON(http.StatusCreated, convert.ToOrganization(ctx, org))
+}
+
+// GetSubgroup gets one direct subgroup by its local name.
+func GetSubgroup(ctx *context.APIContext) {
+	// swagger:operation GET /orgs/{org}/subgroups/{subgroup} organization orgGetSubgroup
+	// ---
+	// summary: Get a subgroup
+	// produces:
+	// - application/json
+	// parameters:
+	// - name: org
+	//   in: path
+	//   description: name of the parent organization
+	//   type: string
+	//   required: true
+	// - name: subgroup
+	//   in: path
+	//   description: local name of the subgroup
+	//   type: string
+	//   required: true
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/Organization"
+	//   "404":
+	//     "$ref": "#/responses/notFound"
+	org, err := organization.GetChildOrg(ctx, ctx.Org.Organization.ID, ctx.PathParam("subgroup"))
+	if err != nil {
+		if organization.IsErrOrgNotExist(err) {
+			ctx.APIErrorNotFound()
+			return
+		}
+		ctx.APIErrorInternal(err)
+		return
+	}
+	if !organization.HasOrgOrUserVisible(ctx, org.AsUser(), ctx.Doer) {
+		ctx.APIErrorNotFound()
+		return
+	}
+	ctx.JSON(http.StatusOK, convert.ToOrganization(ctx, org))
+}
+
+// MoveSubgroup moves a direct subgroup under a new parent.
+func MoveSubgroup(ctx *context.APIContext) {
+	// swagger:operation POST /orgs/{org}/subgroups/{subgroup}/move organization orgMoveSubgroup
+	// ---
+	// summary: Move a subgroup
+	// description: The caller must own the subgroup and the new parent. The git directory is not renamed. Previous nested URLs redirect to the new path.
+	// consumes:
+	// - application/json
+	// produces:
+	// - application/json
+	// parameters:
+	// - name: org
+	//   in: path
+	//   description: name of the current parent organization
+	//   type: string
+	//   required: true
+	// - name: subgroup
+	//   in: path
+	//   description: local name of the subgroup
+	//   type: string
+	//   required: true
+	// - name: body
+	//   in: body
+	//   required: true
+	//   schema: { "$ref": "#/definitions/MoveOrgOption" }
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/Organization"
+	//   "403":
+	//     "$ref": "#/responses/forbidden"
+	//   "422":
+	//     "$ref": "#/responses/validationError"
+	org, err := organization.GetChildOrg(ctx, ctx.Org.Organization.ID, ctx.PathParam("subgroup"))
+	if err != nil {
+		if organization.IsErrOrgNotExist(err) {
+			ctx.APIErrorNotFound()
+			return
+		}
+		ctx.APIErrorInternal(err)
+		return
+	}
+	moveOrganization(ctx, org, web.GetForm[*api.MoveOrgOption](ctx))
+}
+
+// MoveOrganization moves this organization under a new parent, or to the top level.
+func MoveOrganization(ctx *context.APIContext) {
+	// swagger:operation POST /orgs/{org}/move organization orgMove
+	// ---
+	// summary: Move an organization
+	// description: The caller must own this organization and the new parent. An empty parent makes it top-level. The git directory is not renamed. Previous nested URLs redirect to the new path.
+	// consumes:
+	// - application/json
+	// produces:
+	// - application/json
+	// parameters:
+	// - name: org
+	//   in: path
+	//   description: name of the organization
+	//   type: string
+	//   required: true
+	// - name: body
+	//   in: body
+	//   required: true
+	//   schema: { "$ref": "#/definitions/MoveOrgOption" }
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/Organization"
+	//   "403":
+	//     "$ref": "#/responses/forbidden"
+	//   "422":
+	//     "$ref": "#/responses/validationError"
+	moveOrganization(ctx, ctx.Org.Organization, web.GetForm[*api.MoveOrgOption](ctx))
+}
+
+func moveOrganization(ctx *context.APIContext, org *organization.Organization, form *api.MoveOrgOption) {
+	var parent *organization.Organization
+	if form.Parent != "" {
+		var err error
+		parent, err = organization.GetOrgByName(ctx, form.Parent)
+		if err != nil {
+			if organization.IsErrOrgNotExist(err) {
+				ctx.APIErrorNotFound("parent")
+				return
+			}
+			ctx.APIErrorInternal(err)
+			return
+		}
+	}
+	if err := organization.MoveSubOrganization(ctx, org, parent, ctx.Doer); err != nil {
+		if respondSubgroupError(ctx, err) {
+			return
+		}
+		ctx.APIErrorInternal(err)
+		return
+	}
+	ctx.JSON(http.StatusOK, convert.ToOrganization(ctx, org))
 }
 
 func respondSubgroupError(ctx *context.APIContext, err error) bool {

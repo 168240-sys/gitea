@@ -78,6 +78,8 @@ type swaggerParameterBodies struct {
 	CreateOrgOption api.CreateOrgOption
 	// in:body
 	EditOrgOption api.EditOrgOption
+	// in:body
+	MoveOrgOption api.MoveOrgOption
 
 	// in:body
 	CreatePullRequestOption api.CreatePullRequestOption

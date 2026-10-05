@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"gitea.dev/models/db"
 	"gitea.dev/models/organization"
@@ -237,7 +238,40 @@ func SettingsRenamePost(ctx *context.Context) {
 	}
 
 	ctx.Flash.Success(ctx.Tr("org.settings.rename_success", oldOrgName, newOrgName))
-	ctx.JSONRedirect(setting.AppSubURL + "/org/" + url.PathEscape(newOrgName) + "/settings")
+	ctx.JSONRedirect(setting.AppSubURL + "/org/" + url.PathEscape(ctx.Org.Organization.AsUser().RouterName()) + "/settings")
+}
+
+// SettingsMovePost moves the organization under another organization, or to the top level when parent is empty.
+func SettingsMovePost(ctx *context.Context) {
+	if ctx.FormString("org_name") != ctx.Org.Organization.Name {
+		ctx.JSONError(ctx.Tr("form.enterred_invalid_org_name"))
+		return
+	}
+	parentName := strings.TrimSpace(ctx.FormString("parent"))
+	var parent *organization.Organization
+	if parentName != "" {
+		var err error
+		parent, err = organization.GetOrgByName(ctx, parentName)
+		if err != nil {
+			if organization.IsErrOrgNotExist(err) {
+				ctx.JSONError(ctx.Tr("form.user_not_exist"))
+				return
+			}
+			ctx.ServerError("GetOrgByName", err)
+			return
+		}
+	}
+	org := ctx.Org.Organization
+	if err := organization.MoveSubOrganization(ctx, org, parent, ctx.Doer); err != nil {
+		if subgroupErr, ok := errors.AsType[organization.ErrSubgroup](err); ok {
+			ctx.JSONError(ctx.Tr("org.subgroup.err_" + subgroupErr.Code))
+			return
+		}
+		ctx.ServerError("MoveSubOrganization", err)
+		return
+	}
+	ctx.Flash.Success(ctx.Tr("org.subgroup.moved", org.RoutePath))
+	ctx.JSONRedirect(setting.AppSubURL + "/org/" + url.PathEscape(org.AsUser().RouterName()) + "/settings")
 }
 
 // SettingsChangeVisibilityPost response for change organization visibility

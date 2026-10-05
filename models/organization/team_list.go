@@ -5,6 +5,7 @@ package organization
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"gitea.dev/models/db"
@@ -164,6 +165,44 @@ func GetUserOrgTeams(ctx context.Context, orgID, userID int64) (teams TeamList, 
 		Where("team.org_id = ?", orgID).
 		And("team_user.uid=?", userID).
 		Find(&teams)
+}
+
+// PropagatingAncestorTeams returns the user's ancestor-organization teams that include every repository.
+// Specific-repo teams do not propagate. The highest grant wins; nothing denies a grant.
+func PropagatingAncestorTeams(ctx context.Context, orgID, userID int64) (TeamList, error) {
+	if orgID <= 0 || userID <= 0 || !HasAnySubgroup(ctx) {
+		return nil, nil
+	}
+	var teams TeamList
+	seen := map[int64]struct{}{}
+	id := orgID
+	for range MaxSubgroupDepth + 1 {
+		org, err := GetOrgByID(ctx, id)
+		if err != nil {
+			if IsErrOrgNotExist(err) || user_model.IsErrUserNotExist(err) {
+				return teams, nil
+			}
+			return nil, fmt.Errorf("PropagatingAncestorTeams: %w", err)
+		}
+		if org.ParentID == 0 {
+			break
+		}
+		if _, dup := seen[org.ParentID]; dup {
+			break
+		}
+		seen[org.ParentID] = struct{}{}
+		parentTeams, err := GetUserOrgTeams(ctx, org.ParentID, userID)
+		if err != nil {
+			return nil, fmt.Errorf("PropagatingAncestorTeams: %w", err)
+		}
+		for _, team := range parentTeams {
+			if team.IncludesAllRepositories {
+				teams = append(teams, team)
+			}
+		}
+		id = org.ParentID
+	}
+	return teams, nil
 }
 
 // GetUserRepoTeams returns user repo's teams

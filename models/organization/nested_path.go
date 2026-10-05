@@ -22,16 +22,55 @@ import (
 //
 // Existing repository paths win over a subgroup of the same name. "/{owner}/-/" routes
 // (packages, projects) stay attached to the organization that owns that prefix.
+// RouteRedirectHeader is set by RewriteRequestPath when an old nested path should 301.
+// The web router reads it and clears it. Callers must not trust a client-supplied value.
+const RouteRedirectHeader = "X-Gitea-Org-Route-Redirect"
+
 func RewriteRequestPath(req *http.Request) {
-	if req == nil || req.URL == nil || !setting.InstallLock {
+	if req == nil {
+		return
+	}
+	req.Header.Del(RouteRedirectHeader)
+	if req.URL == nil || !setting.InstallLock {
 		return
 	}
 	rewritten, ok := RewriteNestedPath(req.Context(), req.URL.Path)
-	if !ok || rewritten == req.URL.Path {
+	if ok && rewritten != req.URL.Path {
+		req.URL.Path = rewritten
+		req.URL.RawPath = ""
 		return
 	}
-	req.URL.Path = rewritten
-	req.URL.RawPath = ""
+	if dest, redirected := RedirectedRequestPath(req.Context(), req.URL.Path); redirected {
+		req.Header.Set(RouteRedirectHeader, dest)
+	}
+}
+
+// RedirectedRequestPath returns the new public path when a prefix was recorded by a move or rename.
+func RedirectedRequestPath(ctx context.Context, urlPath string) (string, bool) {
+	if urlPath == "" || !strings.HasPrefix(urlPath, "/") {
+		return "", false
+	}
+	segments := strings.Split(strings.Trim(urlPath, "/"), "/")
+	if len(segments) == 0 || segments[0] == "" || skipNestedRewrite(segments[0]) {
+		return "", false
+	}
+	for n := len(segments); n >= 2; n-- {
+		prefix := strings.Join(segments[:n], "/")
+		org, ok, err := LookupOrgRouteRedirect(ctx, prefix)
+		if err != nil {
+			log.Error("RedirectedRequestPath: %v", err)
+			return "", false
+		}
+		if !ok {
+			continue
+		}
+		target := "/" + RoutePathOrName(org)
+		if n < len(segments) {
+			target += "/" + strings.Join(segments[n:], "/")
+		}
+		return target, true
+	}
+	return "", false
 }
 
 // RewriteNestedPath resolves path. ok is false when the path is left unchanged.
@@ -97,13 +136,13 @@ func rewriteNestedSegments(ctx context.Context, segments []string) ([]string, bo
 			if !descended {
 				return nil, false, nil
 			}
-			return append([]string{current.Name, "-"}, segments[i+1:]...), true, nil
+			return append([]string{current.StorageName(), "-"}, segments[i+1:]...), true, nil
 		}
 		if repoSegmentExists(ctx, current.ID, seg) {
 			if !descended {
 				return nil, false, nil
 			}
-			return append([]string{current.Name}, segments[i:]...), true, nil
+			return append([]string{current.StorageName()}, segments[i:]...), true, nil
 		}
 		child, err := GetChildOrg(ctx, current.ID, seg)
 		if err != nil {
@@ -111,7 +150,7 @@ func rewriteNestedSegments(ctx context.Context, segments []string) ([]string, bo
 				if !descended {
 					return nil, false, nil
 				}
-				return append([]string{current.Name}, segments[i:]...), true, nil
+				return append([]string{current.StorageName()}, segments[i:]...), true, nil
 			}
 			return nil, false, err
 		}
@@ -121,7 +160,7 @@ func rewriteNestedSegments(ctx context.Context, segments []string) ([]string, bo
 	if !descended {
 		return nil, false, nil
 	}
-	return []string{current.Name}, true, nil
+	return []string{current.StorageName()}, true, nil
 }
 
 func repoSegmentExists(ctx context.Context, ownerID int64, segment string) bool {
@@ -151,12 +190,39 @@ func ResolveNestedRepo(ctx context.Context, root *user_model.User, rest string) 
 		return root, rest, nil
 	}
 	current := root
-	for _, seg := range parts[:len(parts)-1] {
+	route := RoutePathOrName(root)
+	orgParts := parts[:len(parts)-1]
+	for i := 0; i < len(orgParts); {
+		seg := orgParts[i]
 		child, err := GetChildOrg(ctx, current.ID, seg)
-		if err != nil {
+		if err == nil {
+			current = child.AsUser()
+			route = RoutePathOrName(current)
+			i++
+			continue
+		}
+		if !IsErrOrgNotExist(err) {
 			return nil, "", err
 		}
-		current = child.AsUser()
+		redirected := false
+		for j := len(orgParts); j > i; j-- {
+			candidate := route + "/" + strings.Join(orgParts[i:j], "/")
+			org, ok, lookErr := LookupOrgRouteRedirect(ctx, candidate)
+			if lookErr != nil {
+				return nil, "", lookErr
+			}
+			if !ok {
+				continue
+			}
+			current = org
+			route = RoutePathOrName(current)
+			i = j
+			redirected = true
+			break
+		}
+		if !redirected {
+			return nil, "", err
+		}
 	}
 	return current, parts[len(parts)-1], nil
 }

@@ -35,6 +35,7 @@ type RenderHelper interface {
 // services/markup: some real helper functions could only be provided here because it needs to access various services & templates
 type RenderHelperFuncs struct {
 	IsUsernameMentionable     func(ctx context.Context, username string) bool
+	OrgPathMentionLink        func(ctx context.Context, path string) string
 	RenderRepoFileCodePreview func(ctx context.Context, options RenderCodePreviewOptions) (template.HTML, error)
 	RenderRepoIssueIconTitle  func(ctx context.Context, options RenderIssueIconTitleOptions) (template.HTML, error)
 }

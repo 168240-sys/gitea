@@ -490,11 +490,17 @@ func GetIndividualUserRepoPermission(ctx context.Context, repo *repo_model.Repos
 	minAccessMode := util.Iif(!repo.IsPrivate && !user.IsRestricted, perm_model.AccessModeRead, perm_model.AccessModeNone)
 	perm.AccessMode = max(perm.AccessMode, minAccessMode)
 
-	// get units mode from teams
+	// get units mode from teams. Ancestor teams that include every repository
+	// grant the same access on descendant repositories. Specific-repo teams do not.
 	perm.orgRepoTeams, err = organization.GetUserRepoTeams(ctx, repo.OwnerID, user.ID, repo.ID)
 	if err != nil {
 		return perm, err
 	}
+	ancestorTeams, err := organization.PropagatingAncestorTeams(ctx, repo.OwnerID, user.ID)
+	if err != nil {
+		return perm, err
+	}
+	perm.orgRepoTeams = append(perm.orgRepoTeams, ancestorTeams...)
 	if len(perm.orgRepoTeams) == 0 {
 		return perm, nil
 	}
@@ -562,6 +568,11 @@ func IsUserRealRepoAdmin(ctx context.Context, repo *repo_model.Repository, user 
 	if err != nil {
 		return false
 	}
+	ancestorTeams, err := organization.PropagatingAncestorTeams(ctx, repo.OwnerID, user.ID)
+	if err != nil {
+		return false
+	}
+	teams = append(teams, ancestorTeams...)
 
 	for _, team := range teams {
 		if team.AccessMode >= perm_model.AccessModeAdmin {

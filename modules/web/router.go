@@ -307,10 +307,24 @@ func (r *Router) normalizeRequestPath(resp http.ResponseWriter, req *http.Reques
 
 	if RewriteRequestPath != nil {
 		RewriteRequestPath(req)
+		if dest := req.Header.Get(OrgRouteRedirectHeader); dest != "" {
+			req.Header.Del(OrgRouteRedirectHeader)
+			if strings.HasPrefix(dest, "/") && !strings.HasPrefix(dest, "//") && !strings.Contains(dest, "://") {
+				if req.URL.RawQuery != "" {
+					dest += "?" + req.URL.RawQuery
+				}
+				http.Redirect(resp, req, setting.AppSubURL+dest, http.StatusMovedPermanently)
+				return
+			}
+		}
 	}
 
 	next.ServeHTTP(resp, req)
 }
+
+// OrgRouteRedirectHeader is set by the organization path rewriter for a moved subgroup.
+// It is cleared before the request is handled. Do not send it from a client.
+const OrgRouteRedirectHeader = "X-Gitea-Org-Route-Redirect"
 
 // Combo delegates requests to Combo
 func (r *Router) Combo(pattern string, h ...any) *Combo {

@@ -1833,6 +1833,9 @@ func Routes() *web.Router {
 			m.Get("/activities/feeds", org.ListOrgActivityFeeds)
 			m.Get("/subgroups", org.ListSubgroups)
 			m.Post("/subgroups", reqToken(), reqOrgOwnership(), bind(api.CreateOrgOption{}), org.CreateSubgroup)
+			m.Get("/subgroups/{subgroup}", org.GetSubgroup)
+			m.Post("/subgroups/{subgroup}/move", reqToken(), reqOrgOwnership(), bind(api.MoveOrgOption{}), org.MoveSubgroup)
+			m.Post("/move", reqToken(), reqOrgOwnership(), bind(api.MoveOrgOption{}), org.MoveOrganization)
 
 			m.Group("/blocks", func() {
 				m.Get("", org.ListBlocks)

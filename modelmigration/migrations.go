@@ -435,6 +435,8 @@ func prepareMigrationTasks() []*migration {
 		newMigration(356, "Add index on action_run commit_sha", v29.AddActionRunCommitSHAIndex),
 		newMigration(357, "Normalize legacy team authorize values", v29.NormalizeLegacyTeamAuthorize),
 		newMigration(358, "Add organization parent and route path for subgroups", v29.AddOrgSubgroupColumns),
+		newMigration(359, "Relax user name uniqueness for organization subgroups", v29.RelaxUserNameUniqueness),
+		newMigration(360, "Add organization route redirects", v29.AddOrgRouteRedirect),
 	}
 	return preparedMigrations
 }

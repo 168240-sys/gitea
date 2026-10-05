@@ -1,34 +1,46 @@
 # Nested organizations (subgroups)
 
-This is a first phase for [go-gitea/gitea#1872](https://github.com/go-gitea/gitea/issues/1872). A subgroup is a real organization whose parent is another organization. It is not a second permission system.
+A subgroup is a real organization whose parent is another organization. It is not a second permission system. This is the implementation for [go-gitea/gitea#1872](https://github.com/go-gitea/gitea/issues/1872).
 
-## What shipped
+## Model
 
-- `user.parent_id` (0 for users and top-level organizations) and `user.route_path` (`root/child`, lower case). Migration `358` backfills `route_path = lower_name`.
-- Create, list, and browse subgroups on the web (`/org/{org}/subgroups/new`, org home) and API (`GET`/`POST /api/v1/orgs/{org}/subgroups`). API organization objects include `parent_id` and `route_path`.
-- Public URLs such as `/root/child/repo` are rewritten onto the subgroup's unique name before routing. `/child/repo` keeps working. Git over HTTP and SSH follow the same path.
-- Repository disk layout stays `{uniqueOwnerName}/{repo}.git`.
-- Ancestor organization owners are owners of every descendant: they can see private subgroups and get owner access to descendant repositories. The highest grant wins. Nothing denies a grant.
-- A child cannot be more public than its parent. An organization with subgroups cannot be deleted. Nesting stops at five levels below the root. A parent cannot have a repository and a subgroup with the same name.
+- `user.parent_id` is 0 for users and top-level organizations. `user.route_path` is the public path (`root/child`, lower case). Migration `358` backfills `route_path = lower_name`.
+- `user.lower_name` and `user.name` are indexed, not globally unique. Migration `359` adds:
+  - `disk_name`, globally unique. This is the git directory and the chi username. Roots keep `disk_name = lower_name`, so existing paths and clone URLs do not move.
+  - `namespace_key` (`{parentID}/{lowerName}`), globally unique. Logins and sibling names stay unique. Two subgroups may share a local name when their parents differ.
+- A new subgroup whose lower name is already a disk name is stored as `subgroup-{id}` (or `subgroup-{id}-x` if that is taken). It is reached at `/parent/name/...`. The flat URL of an unambiguous name still works.
+- `GetUserByName` prefers the `parent_id = 0` row, otherwise the only match, otherwise `disk_name`. Login uses root individuals only, so a subgroup cannot take over a password login.
+- `org_route_redirect` (migration `360`) stores previous nested paths. A move or subgroup rename keeps `disk_name` and 301s the old route. Git over SSH follows the same table.
 
-## Why this shape
+## Routing and storage
 
-[lunny](https://github.com/go-gitea/gitea/issues/1872) asked to reuse organization rather than add a parallel group type, and to keep repository storage off the nested URL. [wxiaoguang](https://github.com/go-gitea/gitea/pull/35265) rejected integer group ids because they do not produce `/owner/group/repo`, and asked for a design before a large patch. [delvh](https://github.com/go-gitea/gitea/issues/1872) asked how teams and conflicting grants behave. [TheFox0x7](https://github.com/go-gitea/gitea/issues/1872) said existing clone URLs cannot change.
+Public URLs such as `/root/child/repo` are rewritten onto `disk_name` before chi. An existing repository segment wins over a subgroup of the same name. `/root/child/-/packages` stays on that organization.
 
-`user.lower_name` stays globally unique. Dropping that uniqueness touches login, redirects, API tokens, and every `{username}` lookup. This phase does not do that, so two subgroups cannot share a slug. The nested URL is a route alias. Existing repositories win when a path segment is both a repository and a possible subgroup, so current clone URLs stay valid.
+`HomeLink` stays one segment (`disk_name` when it differs from the local name) so `/{name}/-/` handlers do not redirect-loop. Package and project links use `ScopedLink`, which is the nested route.
 
-`/-/` is already the owner-feature prefix (`/{username}/-/packages`). It is not used as a subgroup separator.
+Repository files stay `{diskName}/{repo}.git`. A rename renames the directory only when `disk_name` changes.
 
 ## Permissions
 
-Teams stay on the organization that defines them. A parent team does not automatically include child-organization repositories. Ancestor owners are the inheritance that matches "owners administer the tree" without inventing deny rules or a second unit-permission table.
+The highest grant wins. Nothing denies a grant.
 
-Direct owners still go through the existing team lookup. Only an owner who is not a direct owner of that organization takes the inherited owner path.
+- Ancestor organization owners are owners of every descendant.
+- A parent team grants access to descendant repositories only when `includes_all_repositories` is set. Teams that list specific repositories do not propagate. The same rule is in the repository list queries, up to five ancestor levels.
+- Secrets and Actions variables do not propagate. A subgroup can have members who are not in the parent team that created the secret.
+- An organization-level Actions runner picks jobs from that organization and its descendants. Repository runners stay on one repository.
 
-## Not in this phase
+Nesting stops at five levels. A child cannot be more public than its parent. An organization with subgroups cannot be deleted. A parent cannot have a repository and a subgroup with the same name. Moving rejects cycles, depth overflows, and name clashes. Owners of the organization and of the new parent may move it (ancestor owners count).
 
-- The same local name under different parents (requires relaxing `lower_name` uniqueness).
-- Parent teams, secrets, runners, and Actions permissions inherited by subgroups.
-- Mentions, markdown links, and package URLs that assume a single path segment.
-- Moving a subgroup to another parent.
-- DCO sign-off. Add `Signed-off-by` on the commits before any upstream pull request. This fork's commit rule forbids that trailer here.
+## API and UI
+
+- `GET`/`POST /api/v1/orgs/{org}/subgroups`
+- `GET /api/v1/orgs/{org}/subgroups/{subgroup}`
+- `POST /api/v1/orgs/{org}/subgroups/{subgroup}/move` and `POST /api/v1/orgs/{org}/move`
+- Web: create on the org home, move from the organization settings danger zone.
+
+Mentions accept `@root/child` and `@root/child/team`. Issue references accept `root/child/repo#1`. A full issue URL with extra path segments keeps the whole owner path. Private organizations are not linked for a viewer who cannot see them.
+
+## Not in this change
+
+- Code-preview URLs (`/.../src/commit/...`) still treat the owner as a single path segment.
+- The first commit on this branch has no `Signed-off-by` line. Later commits include `Signed-off-by: Cursor Agent <cursoragent@cursor.com>`. Upstream may want a human contributor's DCO identity instead.

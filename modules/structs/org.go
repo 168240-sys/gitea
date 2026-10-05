@@ -69,6 +69,12 @@ type CreateOrgOption struct {
 	RepoAdminChangeTeamAccess bool `json:"repo_admin_change_team_access"`
 }
 
+// MoveOrgOption options for moving an organization under a new parent.
+type MoveOrgOption struct {
+	// Name of the new parent organization. Empty moves the organization to the top level.
+	Parent string `json:"parent"`
+}
+
 // EditOrgOption options for editing an organization
 type EditOrgOption struct {
 	// The full display name of the organization

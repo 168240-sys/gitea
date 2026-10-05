@@ -99,7 +99,7 @@ func DeleteOrganization(ctx context.Context, org *org_model.Organization, purge 
 	// FIXME: system notice
 	// Note: There are something just cannot be roll back,
 	//	so just keep error logs of those operations.
-	path := gitrepo.UserLocalPath(org.Name)
+	path := gitrepo.UserLocalPath(org.AsUser().StorageName())
 
 	if err := util.RemoveAllWithRetry(path); err != nil {
 		return fmt.Errorf("failed to RemoveAll %s: %w", path, err)

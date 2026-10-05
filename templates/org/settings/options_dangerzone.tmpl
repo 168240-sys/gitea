@@ -23,6 +23,16 @@
 			</div>
 		</div>
 
+		<div class="item tw-items-center">
+			<div class="item-main">
+				<div class="item-title">{{ctx.Locale.Tr "org.subgroup.move"}}</div>
+				<div class="item-body">{{ctx.Locale.Tr "org.subgroup.move_desc"}}</div>
+			</div>
+			<div class="item-trailing">
+				<button type="button" class="ui basic red show-modal button" data-modal="#move-org-modal">{{ctx.Locale.Tr "org.subgroup.move"}}</button>
+			</div>
+		</div>
+
 		<div class="item">
 			<div class="item-main">
 				<div class="item-title">{{ctx.Locale.Tr "org.settings.delete_account"}}</div>
@@ -103,6 +113,37 @@
 			<div class="actions">
 				<button type="button" class="ui cancel button">{{ctx.Locale.Tr "settings.cancel"}}</button>
 				<button type="submit" class="ui red button">{{ctx.Locale.Tr "org.settings.rename"}}</button>
+			</div>
+		</form>
+	</div>
+</div>
+
+<div class="ui small modal" id="move-org-modal">
+	<div class="header">
+		{{ctx.Locale.Tr "org.subgroup.move"}}
+	</div>
+	<div class="content">
+		<div class="ui warning message">
+			{{ctx.Locale.Tr "org.subgroup.move_desc"}}
+		</div>
+		<form class="ui form form-fetch-action" action="{{.Link}}/move" method="post">
+			<div class="field">
+				<label>
+					{{ctx.Locale.Tr "org.settings.name_confirm"}}
+					<span class="tw-text-red">{{.Org.Name}}</span>
+				</label>
+			</div>
+			<div class="required field">
+				<label for="org_name_to_move">{{ctx.Locale.Tr "org.org_name_holder"}}</label>
+				<input id="org_name_to_move" name="org_name" required>
+			</div>
+			<div class="field">
+				<label for="org_move_parent">{{ctx.Locale.Tr "org.subgroup.move_parent"}}</label>
+				<input id="org_move_parent" name="parent" placeholder="{{ctx.Locale.Tr "org.subgroup.move_parent"}}">
+			</div>
+			<div class="actions">
+				<button type="button" class="ui cancel button">{{ctx.Locale.Tr "settings.cancel"}}</button>
+				<button type="submit" class="ui red button">{{ctx.Locale.Tr "org.subgroup.move"}}</button>
 			</div>
 		</form>
 	</div>

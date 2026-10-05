@@ -4,10 +4,15 @@
 package organization_test
 
 import (
+	"strings"
 	"testing"
 
 	"gitea.dev/models/db"
 	"gitea.dev/models/organization"
+	"gitea.dev/models/perm"
+	access_model "gitea.dev/models/perm/access"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/models/unit"
 	"gitea.dev/models/unittest"
 	user_model "gitea.dev/models/user"
 	"gitea.dev/modules/structs"
@@ -125,4 +130,132 @@ func TestSubgroupDepthLimit(t *testing.T) {
 	var subgroupErr organization.ErrSubgroup
 	require.ErrorAs(t, err, &subgroupErr)
 	assert.Equal(t, organization.SubgroupCodeDepth, subgroupErr.Code)
+}
+
+func TestDuplicateSubgroupNames(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+
+	parent := unittest.AssertExistsAndLoadBean(t, &organization.Organization{ID: 3})
+	owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+
+	// user2 already owns this lower name. The subgroup keeps a different disk name.
+	child := &organization.Organization{Name: "user2", Visibility: structs.VisibleTypePublic}
+	require.NoError(t, organization.CreateSubOrganization(t.Context(), parent, child, owner))
+	assert.True(t, strings.HasPrefix(child.DiskName, "subgroup-"))
+	assert.NotEqual(t, "user2", child.AsUser().StorageName())
+
+	login, err := user_model.GetIndividualUserByName(t.Context(), "user2")
+	require.NoError(t, err)
+	assert.Equal(t, owner.ID, login.ID)
+
+	byName, err := user_model.GetUserByName(t.Context(), "user2")
+	require.NoError(t, err)
+	assert.Equal(t, owner.ID, byName.ID)
+
+	byDisk, err := user_model.GetUserByName(t.Context(), child.DiskName)
+	require.NoError(t, err)
+	assert.Equal(t, child.ID, byDisk.ID)
+
+	rewritten, ok := organization.RewriteNestedPath(t.Context(), "/org3/user2")
+	assert.True(t, ok)
+	assert.Equal(t, "/"+child.DiskName, rewritten)
+
+	other := &organization.Organization{Name: "otherparent", Visibility: structs.VisibleTypePublic}
+	require.NoError(t, organization.CreateOrganization(t.Context(), other, owner))
+	twin := &organization.Organization{Name: "user2", Visibility: structs.VisibleTypePublic}
+	require.NoError(t, organization.CreateSubOrganization(t.Context(), other, twin, owner))
+	assert.NotEqual(t, child.ID, twin.ID)
+	assert.Equal(t, "otherparent/user2", twin.RoutePath)
+
+	// An unambiguous local name still answers on the flat URL.
+	only := &organization.Organization{Name: "onlyonce", Visibility: structs.VisibleTypePublic}
+	require.NoError(t, organization.CreateSubOrganization(t.Context(), parent, only, owner))
+	assert.Equal(t, "onlyonce", only.DiskName)
+	flat, err := user_model.GetUserByName(t.Context(), "onlyonce")
+	require.NoError(t, err)
+	assert.Equal(t, only.ID, flat.ID)
+}
+
+func TestMoveSubOrganization(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+
+	parent := unittest.AssertExistsAndLoadBean(t, &organization.Organization{ID: 3})
+	owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	child := &organization.Organization{Name: "movedchild", Visibility: structs.VisibleTypePublic}
+	require.NoError(t, organization.CreateSubOrganization(t.Context(), parent, child, owner))
+
+	dest := &organization.Organization{Name: "destparent", Visibility: structs.VisibleTypePublic}
+	require.NoError(t, organization.CreateOrganization(t.Context(), dest, owner))
+
+	require.NoError(t, organization.MoveSubOrganization(t.Context(), child, dest, owner))
+	assert.Equal(t, dest.ID, child.ParentID)
+	assert.Equal(t, "destparent/movedchild", child.RoutePath)
+
+	redirected, ok := organization.RedirectedRequestPath(t.Context(), "/org3/movedchild/repo/issues")
+	assert.True(t, ok)
+	assert.Equal(t, "/destparent/movedchild/repo/issues", redirected)
+
+	resolved, repoName, err := organization.ResolveNestedRepo(t.Context(), parent.AsUser(), "movedchild/repo")
+	require.NoError(t, err)
+	assert.Equal(t, child.ID, resolved.ID)
+	assert.Equal(t, "repo", repoName)
+
+	err = organization.MoveSubOrganization(t.Context(), dest, child, owner)
+	var subgroupErr organization.ErrSubgroup
+	require.ErrorAs(t, err, &subgroupErr)
+	assert.Equal(t, organization.SubgroupCodeCycle, subgroupErr.Code)
+}
+
+func TestPropagatingAncestorTeam(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+
+	parent := unittest.AssertExistsAndLoadBean(t, &organization.Organization{ID: 3})
+	owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	member := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
+	child := &organization.Organization{Name: "childrepos", Visibility: structs.VisibleTypePrivate}
+	require.NoError(t, organization.CreateSubOrganization(t.Context(), parent, child, owner))
+
+	_, err := db.GetEngine(t.Context()).Where("org_id = ? AND uid = ?", child.ID, member.ID).Delete(new(organization.OrgUser))
+	require.NoError(t, err)
+
+	repo := &repo_model.Repository{
+		OwnerID:   child.ID,
+		Owner:     child.AsUser(),
+		OwnerName: child.Name,
+		Name:      "hidden",
+		LowerName: "hidden",
+		IsPrivate: true,
+	}
+	require.NoError(t, db.Insert(t.Context(), repo))
+	repo.Owner = child.AsUser()
+	repo.Units = []*repo_model.RepoUnit{{RepoID: repo.ID, Type: unit.TypeCode}}
+
+	assert.False(t, organization.HasOrgOrUserVisible(t.Context(), child.AsUser(), member))
+	p, err := access_model.GetIndividualUserRepoPermission(t.Context(), repo, member)
+	require.NoError(t, err)
+	assert.Equal(t, perm.AccessModeNone, p.UnitAccessMode(unit.TypeCode))
+
+	ids, err := repo_model.SearchRepositoryIDsByCondition(t.Context(), repo_model.AccessibleRepositoryCondition(member, unit.TypeCode))
+	require.NoError(t, err)
+	assert.NotContains(t, ids, repo.ID)
+
+	team := &organization.Team{
+		OrgID:                   parent.ID,
+		Name:                    "allrepos",
+		LowerName:               "allrepos",
+		AccessMode:              perm.AccessModeWrite,
+		IncludesAllRepositories: true,
+		Visibility:              structs.VisibleTypePrivate,
+	}
+	require.NoError(t, db.Insert(t.Context(), team))
+	require.NoError(t, db.Insert(t.Context(), &organization.TeamUser{OrgID: parent.ID, TeamID: team.ID, UID: member.ID}))
+
+	assert.True(t, organization.HasOrgOrUserVisible(t.Context(), child.AsUser(), member))
+	p, err = access_model.GetIndividualUserRepoPermission(t.Context(), repo, member)
+	require.NoError(t, err)
+	assert.Equal(t, perm.AccessModeWrite, p.UnitAccessMode(unit.TypeCode))
+
+	ids, err = repo_model.SearchRepositoryIDsByCondition(t.Context(), repo_model.AccessibleRepositoryCondition(member, unit.TypeCode))
+	require.NoError(t, err)
+	assert.Contains(t, ids, repo.ID)
 }

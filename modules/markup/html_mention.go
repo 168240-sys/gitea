@@ -29,6 +29,15 @@ func mentionProcessor(ctx *RenderContext, node *html.Node) {
 		mention := node.Data[loc.Start:loc.End]
 		orgLowerTeams, checkOrgTeams := ctx.RenderOptions.Metas["teams"] // in format ",team1,team2,...,team-n,", always lowercase
 
+		if strings.Contains(mention, "/") && DefaultRenderHelperFuncs != nil && DefaultRenderHelperFuncs.OrgPathMentionLink != nil {
+			if link := DefaultRenderHelperFuncs.OrgPathMentionLink(ctx, mention[1:]); link != "" {
+				replaceContent(node, loc.Start, loc.End, createLink(ctx, "/:root"+link, mention, "" /*mention*/))
+				node = node.NextSibling.NextSibling
+				start = 0
+				continue
+			}
+		}
+
 		if checkOrgTeams && strings.Contains(mention, "/") {
 			mentionOrg, teamName, _ := strings.Cut(mention, "/")
 			orgName := mentionOrg[1:] // remove the '@' prefix

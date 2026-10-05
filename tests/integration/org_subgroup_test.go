@@ -64,4 +64,47 @@ func TestOrgSubgroups(t *testing.T) {
 
 	req = NewRequest(t, "DELETE", "/api/v1/orgs/org3").AddTokenAuth(ownerToken)
 	MakeRequest(t, req, http.StatusUnprocessableEntity)
+
+	// The same local name can exist under another parent, and a user's login still wins the flat URL.
+	req = NewRequestWithJSON(t, "POST", "/api/v1/orgs", &api.CreateOrgOption{
+		UserName:   "otherparent",
+		Visibility: "public",
+	}).AddTokenAuth(ownerToken)
+	MakeRequest(t, req, http.StatusCreated)
+
+	req = NewRequestWithJSON(t, "POST", "/api/v1/orgs/otherparent/subgroups", &api.CreateOrgOption{
+		UserName:   "subgroupapi",
+		FullName:   "Second subgroup",
+		Visibility: "public",
+	}).AddTokenAuth(ownerToken)
+	resp = MakeRequest(t, req, http.StatusCreated)
+	second := DecodeJSON(t, resp, &api.Organization{})
+	assert.Equal(t, "otherparent/subgroupapi", second.RoutePath)
+
+	req = NewRequest(t, "GET", "/api/v1/orgs/otherparent/subgroups/subgroupapi").AddTokenAuth(ownerToken)
+	resp = MakeRequest(t, req, http.StatusOK)
+	got := DecodeJSON(t, resp, &api.Organization{})
+	assert.Equal(t, second.ID, got.ID)
+
+	req = NewRequestWithJSON(t, "POST", "/api/v1/orgs/org3/subgroups/subgroupapi/move", &api.MoveOrgOption{
+		Parent: "otherparent",
+	}).AddTokenAuth(ownerToken)
+	MakeRequest(t, req, http.StatusUnprocessableEntity)
+
+	req = NewRequestWithJSON(t, "POST", "/api/v1/orgs", &api.CreateOrgOption{
+		UserName:   "thirdparent",
+		Visibility: "public",
+	}).AddTokenAuth(ownerToken)
+	MakeRequest(t, req, http.StatusCreated)
+
+	req = NewRequestWithJSON(t, "POST", "/api/v1/orgs/org3/subgroups/subgroupapi/move", &api.MoveOrgOption{
+		Parent: "thirdparent",
+	}).AddTokenAuth(ownerToken)
+	resp = MakeRequest(t, req, http.StatusOK)
+	moved := DecodeJSON(t, resp, &api.Organization{})
+	assert.Equal(t, "thirdparent/subgroupapi", moved.RoutePath)
+
+	req = NewRequest(t, "GET", "/org3/subgroupapi")
+	resp = MakeRequest(t, req, http.StatusMovedPermanently)
+	assert.Equal(t, "/thirdparent/subgroupapi", resp.Header().Get("Location"))
 }
